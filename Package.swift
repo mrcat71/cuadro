@@ -8,14 +8,18 @@ let package = Package(
         .executable(name: "Cuadro", targets: ["Cuadro"]),
         .library(name: "CuadroKit", targets: ["CuadroKit"]),
     ],
+    dependencies: [
+        // In-app updates; its bin/ tools (generate_keys, sign_update, generate_appcast) also sign releases.
+        .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.10.0"),
+    ],
     targets: [
         // Pure logic and rendering: geometry, annotations, stitching, colors, file naming.
         // No AppKit, so everything here is unit-testable without a window server.
         .target(name: "CuadroKit"),
-        // The menu bar app: AppKit lifecycle, SwiftUI views, ScreenCaptureKit, Vision.
+        // The menu bar app: AppKit lifecycle, SwiftUI views, ScreenCaptureKit, Vision, Sparkle.
         .executableTarget(
             name: "Cuadro",
-            dependencies: ["CuadroKit"],
+            dependencies: ["CuadroKit", .product(name: "Sparkle", package: "Sparkle")],
             swiftSettings: [.defaultIsolation(MainActor.self)]
         ),
         // Renders the app icon PNG set; the Makefile turns it into AppIcon.icns.

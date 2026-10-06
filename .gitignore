@@ -5,3 +5,6 @@
 *.xcodeproj
 xcuserdata/
 DerivedData/
+# Sparkle is pinned with exact: in Package.swift, which Renovate updates; it cannot update
+# Package.resolved, so a committed one would go stale.
+/Package.resolved
