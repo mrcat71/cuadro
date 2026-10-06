@@ -13,6 +13,11 @@ name: release
 #   NOTARY_PASSWORD             app-specific password of that Apple ID
 # Notarization runs only when all three NOTARY_* secrets are set, and only
 # succeeds with a Developer ID Application certificate.
+#
+# Required for publishing (a tag push fails without it):
+#   SPARKLE_PRIVATE_KEY         EdDSA key that signs the update feed; it must
+#                               match SUPublicEDKey in Resources/Info.plist.
+#                               Export it with Sparkle's generate_keys -x.
 
 on:
   push:
@@ -148,7 +153,8 @@ jobs:
         run: make notarize
 
       - name: Smoke test
-        # Launches the release build: opens the editor, settings, onboarding, a
+        # Launches the release build, which also proves the embedded
+        # Sparkle.framework loads: opens the editor, settings, onboarding, a
         # pin and the selection overlay on a synthetic screenshot, renders each
         # window to PNG and quits.
         timeout-minutes: 5
@@ -161,11 +167,48 @@ jobs:
             echo "::error::smoke test rendered only $count windows"
             exit 1
           fi
+          # A zero-size welcome window renders nothing; it once hid every permission request.
+          if ! find "$output" -name '*Welcome to Cuadro*.png' | grep -q .; then
+            echo "::error::smoke test did not render the welcome window"
+            exit 1
+          fi
+
+      - name: Install dmgbuild
+        run: |
+          python3 -m venv "$RUNNER_TEMP/dmgbuild"
+          "$RUNNER_TEMP/dmgbuild/bin/pip" install --quiet --disable-pip-version-check -r .github/dmg-requirements.txt
+          echo "DMGBUILD=$RUNNER_TEMP/dmgbuild/bin/dmgbuild" >> "$GITHUB_ENV"
 
       - name: Package
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: make dist VERSION="$VERSION"
+
+      - name: Release notes
+        # The same notes go to the GitHub Release and into the update window.
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/releases/generate-notes" -f tag_name="$TAG" --jq .body \
+            > "build/dist/cuadro-$VERSION-macos-$(uname -m).md"
+
+      - name: Update feed
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          if [[ -z "$SPARKLE_PRIVATE_KEY" ]]; then
+            if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+              echo "::error::SPARKLE_PRIVATE_KEY is not set; a release without a signed appcast.xml breaks in-app updates"
+              exit 1
+            fi
+            echo "::notice::SPARKLE_PRIVATE_KEY is not set; skipping the update feed"
+            exit 0
+          fi
+          make appcast VERSION="$VERSION"
 
       - name: Publish GitHub Release
         if: startsWith(github.ref, 'refs/tags/') && inputs.dry_run != true
@@ -174,9 +217,9 @@ jobs:
           TAG: ${{ github.ref_name }}
           PRERELEASE: ${{ steps.version.outputs.prerelease }}
         run: |
-          flags=(--verify-tag --title "$TAG" --generate-notes)
+          flags=(--verify-tag --title "$TAG" --notes-file build/dist/*.md)
           if [[ "$PRERELEASE" == "true" ]]; then flags+=(--prerelease); fi
-          gh release create "$TAG" "${flags[@]}" build/dist/*.zip build/dist/*.dmg build/dist/SHA256SUMS
+          gh release create "$TAG" "${flags[@]}" build/dist/*.zip build/dist/*.dmg build/dist/SHA256SUMS build/dist/appcast.xml
 
       - name: Upload artifacts
         if: github.event_name == 'workflow_dispatch'
