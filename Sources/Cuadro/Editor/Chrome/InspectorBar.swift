@@ -111,12 +111,13 @@ private struct AnnotationControls: View {
         }
         if kind.usesShadow {
             Toggle(isOn: Binding(get: { style.shadow }, set: { value in model.updateStyle { $0.shadow = value } })) {
-                Image(systemName: "shadow")
+                // A word: the `shadow` symbol reads as the letter H.
+                Text("Shadow")
             }
             .toggleStyle(.button)
             .buttonStyle(.plain)
             .foregroundStyle(style.shadow ? Color.accentColor : .secondary)
-            .help("Shadow")
+            .help(style.shadow ? "Drop shadow on; click to remove it" : "Drop shadow off; click to add it")
         }
         if model.selectedID != nil {
             Divider().frame(height: 18)
