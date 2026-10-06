@@ -91,7 +91,7 @@ Inside the app:
 
 ## Releases
 
-Pushing a version tag runs [`release.yml`](.github/workflows/release.yml): tests, release build, smoke test, then a GitHub Release with `cuadro-<version>-macos-arm64.zip`, a `.dmg` and `SHA256SUMS`, with notes generated from the commits.
+Pushing a version tag runs [`release.yml`](.github/workflows/release.yml): tests, release build, smoke test, then a GitHub Release titled with the tag (`v0.1.0`) with `cuadro-<version>-macos-arm64.zip`, a `.dmg` and `SHA256SUMS`, with notes generated from the commits.
 
 ```sh
 git tag -a v0.1.0 -m "Cuadro 0.1.0"

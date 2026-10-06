@@ -172,10 +172,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
-          VERSION: ${{ steps.version.outputs.version }}
           PRERELEASE: ${{ steps.version.outputs.prerelease }}
         run: |
-          flags=(--verify-tag --title "Cuadro $VERSION" --generate-notes)
+          flags=(--verify-tag --title "$TAG" --generate-notes)
           if [[ "$PRERELEASE" == "true" ]]; then flags+=(--prerelease); fi
           gh release create "$TAG" "${flags[@]}" build/dist/*.zip build/dist/*.dmg build/dist/SHA256SUMS
 
