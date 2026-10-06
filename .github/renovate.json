@@ -40,6 +40,13 @@
       "matchUpdateTypes": ["major"],
       "addLabels": ["swift", "major"],
       "automerge": false
+    },
+    {
+      "description": "dmgbuild and its two libraries release together; update them as one",
+      "matchManagers": ["pip_requirements"],
+      "matchFileNames": [".github/dmg-requirements.txt"],
+      "addLabels": ["python"],
+      "groupName": "dmgbuild"
     }
   ]
 }
