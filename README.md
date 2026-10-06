@@ -50,7 +50,9 @@ Nothing else is needed: global shortcuts are Carbon hot keys, which work without
 
 The first launch opens a welcome window that shows both permissions with their live state and an **Allow…** button for each missing one. Later launches open it again only while Screen Recording is missing; until then the menu bar menu starts with **Allow Screen Recording…**, and a capture opens the window instead of failing. Accessibility is optional and also requested the first time you press Auto-Scroll. Settings > About shows both at any time.
 
-macOS applies a Screen Recording grant only to a new process: after switching it on, choose **Quit & Reopen** in System Settings or click **Relaunch Cuadro**. If Cuadro is already on in the list but captures still fail (common after updating an ad-hoc signed copy), remove it from the list with − and allow it again.
+macOS applies a Screen Recording grant only to a new process: after switching it on, choose **Quit & Reopen** in System Settings or click **Relaunch Cuadro**.
+
+After an update of an ad-hoc signed copy, System Settings still shows Cuadro switched on, but the entry belongs to the old signature and macOS ignores it for the new copy. **Allow…** handles this: its first press per launch clears Cuadro's own entry (`tccutil reset ScreenCapture io.github.mrcat71.cuadro`, likewise `Accessibility`) and asks afresh, so switching Cuadro on again is enough. A stable signature (see [Signing](#signing)) avoids the round trip.
 
 ## Updates
 

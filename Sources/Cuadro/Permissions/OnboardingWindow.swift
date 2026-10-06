@@ -5,6 +5,7 @@ import SwiftUI
 final class PermissionStatus {
     var screenRecording = PermissionCenter.shared.screenRecordingState
     var accessibility = PermissionCenter.shared.hasAccessibility
+    var askedForScreenRecording = PermissionCenter.shared.didAskForScreenRecording
 
     @ObservationIgnored private var timer: Timer?
 
@@ -24,6 +25,7 @@ final class PermissionStatus {
     func refresh() {
         screenRecording = PermissionCenter.shared.screenRecordingState
         accessibility = PermissionCenter.shared.hasAccessibility
+        askedForScreenRecording = PermissionCenter.shared.didAskForScreenRecording
     }
 }
 
@@ -103,18 +105,20 @@ struct OnboardingView: View {
             PermissionList(status: status)
             // Every hint takes part in layout, so the window (sized once) fits whichever one shows.
             ZStack {
-                ForEach(PermissionState.allCases, id: \.self) { state in
-                    Text(Self.hint(for: state))
+                ForEach(Hint.allCases, id: \.self) { hint in
+                    Text(hint.text)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                         .fixedSize(horizontal: false, vertical: true)
-                        .opacity(state == status.screenRecording ? 1 : 0)
-                        .accessibilityHidden(state != status.screenRecording)
+                        .opacity(hint == currentHint ? 1 : 0)
+                        .accessibilityHidden(hint != currentHint)
                 }
             }
             HStack {
-                if status.screenRecording == .needsRelaunch {
+                // A grant made while Cuadro runs only shows after a relaunch, so once the user has
+                // been to System Settings, relaunching is the next step.
+                if status.screenRecording == .needsRelaunch || currentHint == .relaunchAfterAllowing {
                     Button("Relaunch Cuadro", action: PermissionCenter.shared.relaunch)
                         .buttonStyle(.glassProminent)
                         .keyboardShortcut(.defaultAction)
@@ -139,14 +143,24 @@ struct OnboardingView: View {
         .frame(width: 520)
     }
 
-    private static func hint(for screenRecording: PermissionState) -> String {
-        switch screenRecording {
-        case .granted:
-            "Cuadro Settings > About shows these at any time."
-        case .needsRelaunch:
-            "Screen Recording is on. Relaunch Cuadro so macOS applies it."
-        case .missing:
-            "Switch Cuadro on in System Settings, then relaunch it. Already on but captures fail? Remove Cuadro from the list with −, then allow it again."
+    private enum Hint: CaseIterable {
+        case granted, needsRelaunch, allow, relaunchAfterAllowing
+
+        var text: String {
+            switch self {
+            case .granted: "Cuadro Settings > About shows these at any time."
+            case .needsRelaunch: "Screen Recording is on. Relaunch Cuadro so macOS applies it."
+            case .allow: "Click Allow…, switch Cuadro on in System Settings, then relaunch Cuadro."
+            case .relaunchAfterAllowing: "Switched Cuadro on? Relaunch Cuadro to apply it. Still off after that? Click Allow… again."
+            }
+        }
+    }
+
+    private var currentHint: Hint {
+        switch status.screenRecording {
+        case .granted: .granted
+        case .needsRelaunch: .needsRelaunch
+        case .missing: status.askedForScreenRecording ? .relaunchAfterAllowing : .allow
         }
     }
 }
@@ -158,10 +172,8 @@ struct PermissionList: View {
     var body: some View {
         VStack(spacing: 0) {
             PermissionRow(title: "Screen Recording", detail: "Required for every capture.", state: status.screenRecording) {
-                let permissions = PermissionCenter.shared
-                if !permissions.requestScreenRecording() {
-                    permissions.openScreenRecordingSettings()
-                }
+                PermissionCenter.shared.allowScreenRecording()
+                status.refresh()
             }
             Divider().padding(.horizontal, 14)
             PermissionRow(
@@ -169,8 +181,7 @@ struct PermissionList: View {
                 detail: "Optional, only for auto-scroll in scrolling captures.",
                 state: status.accessibility ? .granted : .missing
             ) {
-                PermissionCenter.shared.requestAccessibility()
-                PermissionCenter.shared.openAccessibilitySettings()
+                PermissionCenter.shared.allowAccessibility()
             }
         }
         .glassEffect(.regular, in: .rect(cornerRadius: 18))
