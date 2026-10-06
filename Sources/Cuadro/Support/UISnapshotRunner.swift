@@ -32,6 +32,10 @@ enum UISnapshotRunner {
         OnboardingWindowController.shared.show()
         ThumbnailOverlay.shared.show(CaptureResult(image: sample, scale: 2, kind: .area))
         try await Task.sleep(for: .seconds(2))
+        if let editor = (NSApp.windows.compactMap { $0.windowController as? EditorWindowController }.first) {
+            // 100% whenever the screen fits the 800 × 500 pt sample; less means the initial fit broke.
+            print("editor zoom \(Int((editor.model.zoom * 100).rounded()))%")
+        }
 
         guard PermissionCenter.shared.hasScreenRecording else {
             // Without Screen Recording, render the layer trees in-process. Liquid Glass is a
@@ -114,7 +118,7 @@ enum UISnapshotRunner {
         let rectangle = Annotation(kind: .rectangle, start: CGPoint(x: 360, y: 160), end: CGPoint(x: 560, y: 260), style: model.style(for: .rectangle))
         var text = Annotation(kind: .text, start: CGPoint(x: 90, y: 300), style: model.style(for: .text))
         text.text = "Liquid Glass markup"
-        var counter = Annotation(kind: .counter, start: CGPoint(x: 620, y: 120), style: model.style(for: .counter))
+        var counter = Annotation(kind: .counter, start: CGPoint(x: 600, y: 100), end: CGPoint(x: 640, y: 140), style: model.style(for: .counter))
         counter.number = 1
         let pixelate = Annotation(kind: .pixelate, start: CGPoint(x: 600, y: 300), end: CGPoint(x: 760, y: 380), style: model.style(for: .obscure))
         let highlight = Annotation(kind: .highlighter, start: CGPoint(x: 80, y: 400), end: CGPoint(x: 400, y: 430), style: model.style(for: .highlighter))
