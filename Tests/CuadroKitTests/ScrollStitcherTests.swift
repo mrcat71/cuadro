@@ -1,4 +1,5 @@
 import CoreGraphics
+import Foundation
 import Testing
 @testable import CuadroKit
 
@@ -18,10 +19,13 @@ struct SyntheticPage {
     static let width = 64
     let rows: [[UInt8]]
 
-    init(height: Int, seed: UInt64) {
+    /// - Parameter detailColumns: columns with content; the rest is plain background, like the
+    ///   margin next to a short line of text. `nil` fills every column.
+    init(height: Int, seed: UInt64, detailColumns: Range<Int>? = nil) {
         var rng = SplitMix64(state: seed)
         rows = (0..<height).map { _ in
-            (0..<Self.width).flatMap { _ -> [UInt8] in
+            (0..<Self.width).flatMap { x -> [UInt8] in
+                if let detailColumns, !detailColumns.contains(x) { return [30, 30, 30, 255] }
                 let value = rng.next()
                 return [UInt8(value & 0xFF), UInt8((value >> 8) & 0xFF), UInt8((value >> 16) & 0xFF), 255]
             }
@@ -126,6 +130,63 @@ struct ScrollStitcherTests {
         #expect(stitcher.height == 250)
         #expect(stitcher.add(page.frame(offset: 140, height: 160)) == .limitReached)
         #expect(stitcher.outputBytes == page.bytes(0..<250))
+    }
+
+    @Test func stitchesUpwardScrolling() {
+        let stitcher = ScrollStitcher()
+        let outcomes = [300, 260, 205, 150].map { stitcher.add(page.frame(offset: $0, height: 160)) }
+        #expect(outcomes == [.started, .appended(rows: 40), .appended(rows: 55), .appended(rows: 55)])
+        #expect(stitcher.direction == .up)
+        #expect(stitcher.height == 310)
+        #expect(stitcher.outputBytes == page.bytes(150..<460))
+    }
+
+    @Test func keepsStickyHeaderAndFooterOnceScrollingUp() {
+        let stitcher = ScrollStitcher()
+        for offset in [200, 170, 130] {
+            _ = stitcher.add(page.frame(offset: offset, height: 160, header: 20, footer: 12))
+        }
+        let header = (0..<20).flatMap { SyntheticPage.headerRow($0) }
+        let footer = (0..<12).flatMap { SyntheticPage.footerRow($0) }
+        #expect(stitcher.height == 20 + 198 + 12)
+        #expect(stitcher.outputBytes == header + page.bytes(130..<328) + footer)
+    }
+
+    @Test func followsTheFirstDirectionOnly() {
+        let down = ScrollStitcher()
+        _ = down.add(page.frame(offset: 100, height: 160))
+        #expect(down.add(page.frame(offset: 140, height: 160)) == .appended(rows: 40))
+        #expect(down.add(page.frame(offset: 90, height: 160)) == .scrolledBack)
+        #expect(down.direction == .down)
+
+        let up = ScrollStitcher()
+        _ = up.add(page.frame(offset: 100, height: 160))
+        #expect(up.add(page.frame(offset: 60, height: 160)) == .appended(rows: 40))
+        #expect(up.add(page.frame(offset: 110, height: 160)) == .scrolledBack)
+        #expect(up.outputBytes == page.bytes(60..<260))
+    }
+
+    @Test func detectsScrollingOfShortLines() {
+        // Only the first of eight segments has detail, like short lines of text in a wide area.
+        let sparse = SyntheticPage(height: 400, seed: 7, detailColumns: 0..<8)
+        let stitcher = ScrollStitcher()
+        #expect(stitcher.add(sparse.frame(offset: 0, height: 120)) == .started)
+        #expect(stitcher.add(sparse.frame(offset: 30, height: 120)) == .appended(rows: 30))
+        #expect(stitcher.add(sparse.frame(offset: 30, height: 120)) == .unchanged)
+        #expect(stitcher.outputBytes == sparse.bytes(0..<150))
+    }
+
+    @Test func buildsImagesScrollingUp() throws {
+        let stitcher = ScrollStitcher()
+        _ = stitcher.add(page.frame(offset: 200, height: 160))
+        _ = stitcher.add(page.frame(offset: 120, height: 160))
+        let space = try #require(CGColorSpace(name: CGColorSpace.sRGB))
+        let info = CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue)
+        let image = try #require(stitcher.makeImage(colorSpace: space, bitmapInfo: info))
+        #expect(image.height == 240)
+        // The image reads top to bottom even though upward scrolling is stitched upside down.
+        let data = try #require(image.dataProvider?.data as Data?)
+        #expect(Array(data.prefix(SyntheticPage.width * 4)) == page.rows[120])
     }
 
     @Test func rejectsFramesOfDifferentSize() {

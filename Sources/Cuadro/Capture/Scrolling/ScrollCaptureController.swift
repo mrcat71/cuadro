@@ -7,9 +7,11 @@ import SwiftUI
 @Observable
 final class ScrollCaptureModel {
     var height = 0
-    var status = "Scroll down slowly to capture"
+    var status = "Scroll up or down slowly to capture"
     var preview: NSImage?
     var isAutoScrolling = false
+    /// Set by the first scroll; the capture only grows that way.
+    var direction: ScrollDirection?
 }
 
 /// Scrolling capture: streams the selected region, stitches frames as the user (or auto-scroll)
@@ -28,6 +30,8 @@ final class ScrollCaptureController {
     private var autoScrollTimer: Timer?
     private var lastProgress = Date()
     private var isFinishing = false
+    /// Stitch outcomes per kind, logged when the capture ends to explain short results.
+    private var outcomeCounts: [String: Int] = [:]
 
     /// - Parameter region: display-local y-down rect in points.
     init(display: DisplaySnapshot, region: CGRect, completion: @escaping (CaptureResult?) -> Void) {
@@ -89,6 +93,8 @@ final class ScrollCaptureController {
 
     private func handle(_ progress: StitchWorker.Progress) {
         model.height = progress.height
+        model.direction = progress.direction
+        outcomeCounts[progress.outcome.logName, default: 0] += 1
         if let preview = progress.preview {
             model.preview = NSImage(cgImage: preview, scale: 1)
         }
@@ -101,9 +107,9 @@ final class ScrollCaptureController {
         case .unchanged, .sizeMismatch:
             break
         case .scrolledBack:
-            model.status = "Scroll down to continue"
+            model.status = model.direction == .up ? "Scroll up to continue" : "Scroll down to continue"
         case .lostTrack:
-            model.status = "Too fast: scroll back up a little"
+            model.status = "Too fast: scroll back a little"
         case .limitReached:
             model.status = "Reached the \(AppSettings.shared.scrollMaxHeight.formatted()) px limit"
             stopAutoScroll()
@@ -138,7 +144,9 @@ final class ScrollCaptureController {
             model.status = "Reached the end. Press Done."
             return
         }
-        let pixels = Int32(-max(4, 36 * AppSettings.shared.autoScrollSpeed))
+        // Positive wheel values scroll up; keep going the way the user started.
+        let step = Int32(max(4, 36 * AppSettings.shared.autoScrollSpeed))
+        let pixels = model.direction == .up ? step : -step
         guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: pixels, wheel2: 0, wheel3: 0) else { return }
         event.location = location
         event.post(tap: .cghidEventTap)
@@ -156,6 +164,9 @@ final class ScrollCaptureController {
         guard !isFinishing else { return }
         isFinishing = true
         stopAutoScroll()
+        let counts = outcomeCounts.sorted { $0.key < $1.key }.map { "\($0.key) \($0.value)" }.joined(separator: ", ")
+        let direction = model.direction.map { "\($0)" } ?? "none"
+        Log.capture.notice("Scrolling capture \(save ? "done" : "cancelled", privacy: .public): \(self.model.height) px, direction \(direction, privacy: .public), frames: \(counts, privacy: .public)")
         Task {
             if let stream {
                 do {
@@ -220,6 +231,7 @@ actor StitchWorker {
     struct Progress: Sendable {
         let outcome: StitchOutcome
         let height: Int
+        let direction: ScrollDirection?
         let preview: CGImage?
     }
 
@@ -245,7 +257,7 @@ actor StitchWorker {
             preview = stitcher.previewImage(maxWidth: 180, colorSpace: colorSpace, bitmapInfo: Self.bitmapInfo)
             lastPreview = Date()
         }
-        return Progress(outcome: outcome, height: stitcher.height, preview: preview)
+        return Progress(outcome: outcome, height: stitcher.height, direction: stitcher.direction, preview: preview)
     }
 
     func finalImage() -> CGImage? {
@@ -302,6 +314,20 @@ nonisolated final class StreamFrameOutput: NSObject, SCStreamOutput, SCStreamDel
     }
 }
 
+private extension StitchOutcome {
+    var logName: String {
+        switch self {
+        case .started: "started"
+        case .appended: "appended"
+        case .unchanged: "unchanged"
+        case .scrolledBack: "scrolledBack"
+        case .lostTrack: "lostTrack"
+        case .limitReached: "limitReached"
+        case .sizeMismatch: "sizeMismatch"
+        }
+    }
+}
+
 struct ScrollBorderView: View {
     let size: CGSize
     @State private var phase: CGFloat = 0
@@ -329,7 +355,7 @@ struct ScrollHUDView: View {
                     Image(nsImage: preview)
                         .resizable()
                         .aspectRatio(contentMode: .fit)
-                        .frame(maxWidth: 150, maxHeight: 220, alignment: .bottom)
+                        .frame(maxWidth: 150, maxHeight: 220, alignment: model.direction == .up ? .top : .bottom)
                         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 } else {
                     Image(systemName: "arrow.down.to.line.compact")
