@@ -3,7 +3,7 @@
 
 APP_NAME      := Cuadro
 CONFIG        ?= release
-VERSION       ?= 0.1.1
+VERSION       ?= 0.1.2
 BUILD_NUMBER  ?= $(shell git rev-list --count HEAD 2>/dev/null || echo 1)
 ARCH          ?= $(shell uname -m)
 BUILD_DIR     := build
