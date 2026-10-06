@@ -111,8 +111,8 @@ private struct AnnotationControls: View {
         }
         if kind.usesShadow {
             Toggle(isOn: Binding(get: { style.shadow }, set: { value in model.updateStyle { $0.shadow = value } })) {
-                // A word: the `shadow` symbol reads as the letter H.
-                Text("Shadow")
+                Image(systemName: "shadow")
+                    .accessibilityLabel("Shadow")
             }
             .toggleStyle(.button)
             .buttonStyle(.plain)
