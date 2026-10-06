@@ -1,0 +1,192 @@
+name: release
+
+# Pushing a vX.Y.Z tag tests, builds, packages and publishes a GitHub Release.
+# Running it manually (workflow_dispatch) builds the same artifacts and attaches
+# them to the run instead of publishing.
+#
+# Optional repository secrets; without them the app is ad-hoc signed:
+#   MACOS_CERTIFICATE_P12       base64 of a .p12 with a code signing identity
+#                               (Apple Development or Developer ID Application)
+#   MACOS_CERTIFICATE_PASSWORD  password of that .p12
+#   NOTARY_APPLE_ID             Apple ID for notarization
+#   NOTARY_TEAM_ID              Apple Developer team ID
+#   NOTARY_PASSWORD             app-specific password of that Apple ID
+# Notarization runs only when all three NOTARY_* secrets are set, and only
+# succeeds with a Developer ID Application certificate.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build without creating a GitHub Release"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  release:
+    name: build + publish
+    # GitHub-hosted on purpose: the self-hosted runners are Linux-only, and this
+    # needs macOS with Xcode. Same Xcode build (27.0, 27A266a) as local
+    # development. xcode-27 is a GitHub public preview label; move to macos-27
+    # once it is generally available.
+    runs-on: xcode-27
+    timeout-minutes: 30
+    permissions:
+      contents: write  # create the GitHub Release
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
+      HAS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE_P12 != '' }}
+      HAS_NOTARY: ${{ secrets.NOTARY_APPLE_ID != '' && secrets.NOTARY_TEAM_ID != '' && secrets.NOTARY_PASSWORD != '' }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0  # the build number is the commit count
+
+      - name: Toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+
+      - name: Resolve version
+        id: version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="0.0.0-dev.${GITHUB_SHA::7}"
+          fi
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::$GITHUB_REF_NAME is not vMAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH-PRERELEASE"
+            exit 1
+          fi
+          prerelease=false
+          if [[ "$version" == *-* ]]; then prerelease=true; fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+          echo "Version: $version (prerelease: $prerelease)"
+
+      - name: Reject duplicate release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::error::release $TAG already exists"
+            exit 1
+          fi
+
+      - name: Test
+        run: make test
+
+      - name: Import signing certificate
+        if: env.HAS_CERTIFICATE == 'true'
+        env:
+          CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          keychain_password="$(uuidgen)"
+          certificate="$RUNNER_TEMP/certificate.p12"
+          printf '%s' "$CERTIFICATE_P12" | base64 --decode > "$certificate"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$certificate" -k "$keychain" -P "$CERTIFICATE_PASSWORD" -f pkcs12 -T /usr/bin/codesign
+          rm -f "$certificate"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain"
+          identity="$(security find-identity -v -p codesigning "$keychain" | awk '/^ *[0-9]+\)/ { print $2; exit }')"
+          if [[ -z "$identity" ]]; then
+            echo "::error::MACOS_CERTIFICATE_P12 holds no valid code signing identity"
+            exit 1
+          fi
+          echo "SIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
+          echo "SIGNING_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+
+      - name: Build app
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          timestamp="--timestamp=none"
+          if [[ "$HAS_CERTIFICATE" == "true" && "$HAS_NOTARY" == "true" ]]; then timestamp="--timestamp"; fi
+          make app VERSION="$VERSION" CODESIGN_TIMESTAMP="$timestamp"
+
+      - name: Verify bundle
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          codesign --verify --deep --strict --verbose=2 build/Cuadro.app
+          bundled="$(plutil -extract CFBundleShortVersionString raw build/Cuadro.app/Contents/Info.plist)"
+          if [[ "$bundled" != "$VERSION" ]]; then
+            echo "::error::bundle version $bundled does not match $VERSION"
+            exit 1
+          fi
+          lipo -archs build/Cuadro.app/Contents/MacOS/Cuadro
+
+      - name: Notarize
+        if: env.HAS_CERTIFICATE == 'true' && env.HAS_NOTARY == 'true'
+        env:
+          NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
+          NOTARY_TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
+          NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
+        run: make notarize
+
+      - name: Smoke test
+        # Launches the release build: opens the editor, settings, onboarding, a
+        # pin and the selection overlay on a synthetic screenshot, renders each
+        # window to PNG and quits.
+        timeout-minutes: 5
+        run: |
+          output="$RUNNER_TEMP/ui-snapshot"
+          build/Cuadro.app/Contents/MacOS/Cuadro --ui-snapshot "$output"
+          count="$(find "$output" -name '*.png' | wc -l | tr -d ' ')"
+          echo "Rendered $count windows"
+          if (( count < 5 )); then
+            echo "::error::smoke test rendered only $count windows"
+            exit 1
+          fi
+
+      - name: Package
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: make dist VERSION="$VERSION"
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/') && inputs.dry_run != true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ steps.version.outputs.version }}
+          PRERELEASE: ${{ steps.version.outputs.prerelease }}
+        run: |
+          flags=(--verify-tag --title "Cuadro $VERSION" --generate-notes)
+          if [[ "$PRERELEASE" == "true" ]]; then flags+=(--prerelease); fi
+          gh release create "$TAG" "${flags[@]}" build/dist/*.zip build/dist/*.dmg build/dist/SHA256SUMS
+
+      - name: Upload artifacts
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: cuadro-${{ steps.version.outputs.version }}
+          path: build/dist/
+          retention-days: 14
+
+      - name: Remove signing keychain
+        if: always() && env.SIGNING_KEYCHAIN != ''
+        run: security delete-keychain "$SIGNING_KEYCHAIN"
