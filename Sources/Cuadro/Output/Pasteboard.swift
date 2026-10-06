@@ -48,6 +48,13 @@ enum Pasteboard {
     /// Keeps the provider of the current clipboard item alive.
     private static var tiffProvider: TIFFProvider?
 
+    /// Puts a file on the clipboard, for pasting a recording into Finder or a chat.
+    static func copy(fileURL: URL) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.writeObjects([fileURL as NSURL])
+    }
+
     static func copy(text: String) {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()

@@ -9,11 +9,13 @@ nonisolated let hotKeySignature: OSType = 0x4355_4144
 final class HotKeyCenter {
     static let shared = HotKeyCenter()
 
-    var handler: ((AppAction) -> Void)?
+    /// Called with the action and whether it came from the shortcut's Control variant.
+    var handler: ((AppAction, _ copyOnly: Bool) -> Void)?
     /// Actions whose shortcut could not be registered (usually taken by another app).
     private(set) var failures: [AppAction: OSStatus] = [:]
 
     private var references: [AppAction: EventHotKeyRef] = [:]
+    private var copyOnlyReferences: [EventHotKeyRef] = []
     private var eventHandler: EventHandlerRef?
     private var bindings: [AppAction: KeyCombo] = [:]
     private var suspendCount = 0
@@ -34,9 +36,13 @@ final class HotKeyCenter {
         if suspendCount == 0 { registerAll() }
     }
 
+    /// Hot key IDs above this are the Control variants of shortcuts (copy to the clipboard only).
+    private static let copyOnlyOffset: UInt32 = 1000
+
     fileprivate func handle(id: UInt32) {
-        guard let action = AppAction(hotKeyID: id) else { return }
-        handler?(action)
+        let copyOnly = id > Self.copyOnlyOffset
+        guard let action = AppAction(hotKeyID: copyOnly ? id - Self.copyOnlyOffset : id) else { return }
+        handler?(action, copyOnly)
     }
 
     private func registerAll() {
@@ -54,16 +60,33 @@ final class HotKeyCenter {
                 failures[action] = status
                 Log.hotkeys.error("Could not register \(combo.displayString(), privacy: .public) for \(action.rawValue, privacy: .public): OSStatus \(status)")
             }
+            registerCopyOnlyVariant(of: combo, for: action)
         }
         let registered = references.keys.map(\.rawValue).sorted().joined(separator: ", ")
         Log.hotkeys.notice("Registered \(self.references.count) hot keys: \(registered, privacy: .public)")
     }
 
+    /// The same shortcut with Control added copies the screenshot without opening anything, like
+    /// macOS's own Control-Shift-Command-3. Best effort: another app may own that combination.
+    private func registerCopyOnlyVariant(of combo: KeyCombo, for action: AppAction) {
+        guard action.supportsCopyOnly, !combo.modifiers.contains(.control) else { return }
+        let variant = KeyCombo(keyCode: combo.keyCode, modifiers: combo.modifiers.union(.control))
+        var reference: EventHotKeyRef?
+        let id = EventHotKeyID(signature: hotKeySignature, id: action.hotKeyID + Self.copyOnlyOffset)
+        let status = RegisterEventHotKey(variant.keyCode, variant.carbonModifiers, id, GetApplicationEventTarget(), 0, &reference)
+        if status == noErr, let reference {
+            copyOnlyReferences.append(reference)
+        } else {
+            Log.hotkeys.notice("Control variant \(variant.displayString(), privacy: .public) for \(action.rawValue, privacy: .public) is taken: OSStatus \(status)")
+        }
+    }
+
     private func unregisterAll() {
-        for reference in references.values {
+        for reference in references.values + copyOnlyReferences {
             UnregisterEventHotKey(reference)
         }
         references.removeAll()
+        copyOnlyReferences.removeAll()
     }
 
     private func installHandlerIfNeeded() {

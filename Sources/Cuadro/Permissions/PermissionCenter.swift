@@ -1,3 +1,4 @@
+import AVFoundation
 import AppKit
 import ApplicationServices
 import CoreGraphics
@@ -99,6 +100,19 @@ final class PermissionCenter {
     func requestAccessibility() {
         let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
         _ = AXIsProcessTrustedWithOptions(options)
+    }
+
+    /// Asks for the microphone, which only "Record the microphone" uses. True when allowed.
+    func requestMicrophone() async -> Bool {
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized:
+            return true
+        case .notDetermined:
+            return await AVCaptureDevice.requestAccess(for: .audio)
+        default:
+            open("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
+            return false
+        }
     }
 
     func openAccessibilitySettings() {

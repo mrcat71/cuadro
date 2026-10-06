@@ -89,6 +89,23 @@ struct CaptureSettingsPane: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
+            Section("Screen recording") {
+                Toggle("Show the pointer", isOn: $settings.recordPointer)
+                Toggle("Highlight clicks", isOn: $settings.recordClicks)
+                Toggle("Record system audio", isOn: $settings.recordSystemAudio)
+                Toggle("Record the microphone", isOn: $settings.recordMicrophone)
+                    .onChange(of: settings.recordMicrophone) { _, enabled in
+                        guard enabled else { return }
+                        Task {
+                            if await !PermissionCenter.shared.requestMicrophone() {
+                                settings.recordMicrophone = false
+                            }
+                        }
+                    }
+                Text("Recordings are saved as MP4 next to your screenshots, copied to the clipboard and shown in Finder.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
             Section("Color picker") {
                 Picker("Copy colors as", selection: $settings.colorFormat) {
                     ForEach(ColorFormat.allCases) { format in
@@ -228,7 +245,7 @@ struct ShortcutsSettingsPane: View {
                     }
                 }
             } footer: {
-                Text("Shortcuts work in every app. macOS keeps ⇧⌘3, ⇧⌘4 and ⇧⌘5 unless you turn them off in System Settings > Keyboard > Keyboard Shortcuts > Screenshots.")
+                Text("Shortcuts work in every app. Add Control to a capture shortcut, or hold Control as you finish a selection, to copy the screenshot without opening anything. macOS keeps ⇧⌘3, ⇧⌘4 and ⇧⌘5 unless you turn them off in System Settings > Keyboard > Keyboard Shortcuts > Screenshots.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }

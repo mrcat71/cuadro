@@ -1,5 +1,6 @@
 import AppKit
 import CuadroKit
+@preconcurrency import ScreenCaptureKit
 
 /// Entry point for every capture mode and the shared post-capture pipeline.
 final class CaptureCoordinator {
@@ -7,40 +8,55 @@ final class CaptureCoordinator {
 
     private var overlay: OverlayController?
     private var scrollSession: ScrollCaptureController?
+    private var recorder: ScreenRecordingController?
     private var isStarting = false
     private let settings = AppSettings.shared
 
     var isBusy: Bool { overlay != nil || scrollSession != nil || isStarting }
+    var isRecording: Bool { recorder != nil }
+    var recordingElapsed: TimeInterval? { recorder?.elapsed }
 
-    func perform(_ action: AppAction) {
+    /// - Parameter copyOnly: Control was held (a Control variant of the shortcut, or a menu
+    ///   click): the screenshot only goes to the clipboard, nothing opens.
+    func perform(_ action: AppAction, copyOnly: Bool = false) {
         switch action {
-        case .captureArea: beginOverlay(mode: .area, intent: .capture)
-        case .captureWindow: beginOverlay(mode: .window, intent: .capture)
-        case .captureActiveWindow: captureActiveWindow()
-        case .captureFullscreen: captureFullscreen()
+        case .captureArea: beginOverlay(mode: .area, intent: .capture, copyOnly: copyOnly)
+        case .captureWindow: beginOverlay(mode: .window, intent: .capture, copyOnly: copyOnly)
+        case .captureActiveWindow: captureActiveWindow(copyOnly: copyOnly)
+        case .captureFullscreen: captureFullscreen(copyOnly: copyOnly)
         case .captureScrolling: beginOverlay(mode: .area, intent: .scrolling)
-        case .repeatArea: repeatLastArea()
-        case .captureDelayed: captureDelayed(seconds: settings.delaySeconds)
+        case .repeatArea: repeatLastArea(copyOnly: copyOnly)
+        case .captureDelayed: captureDelayed(seconds: settings.delaySeconds, copyOnly: copyOnly)
         case .recognizeText: beginOverlay(mode: .area, intent: .recognizeText)
         case .pickColor: beginOverlay(mode: .picker, intent: .capture)
         case .measure: beginOverlay(mode: .ruler, intent: .capture)
         case .openFile: DocumentOpener.openFile()
         case .openClipboard: DocumentOpener.openClipboard()
+        case .recordScreen: toggleRecording()
         }
+    }
+
+    /// Starts picking the area to record, or stops the recording in progress.
+    func toggleRecording() {
+        if let recorder {
+            recorder.stop()
+            return
+        }
+        beginOverlay(mode: .area, intent: .record)
     }
 
     func pinArea() {
         beginOverlay(mode: .area, intent: .pin)
     }
 
-    func captureDelayed(seconds: Int) {
+    func captureDelayed(seconds: Int, copyOnly: Bool = false) {
         if CountdownHUD.shared.isRunning {
             CountdownHUD.shared.cancel()
             return
         }
         guard !isBusy, ensurePermission() else { return }
         CountdownHUD.shared.start(seconds: seconds) { [weak self] in
-            self?.beginOverlay(mode: .area, intent: .capture)
+            self?.beginOverlay(mode: .area, intent: .capture, copyOnly: copyOnly)
         }
     }
 
@@ -58,7 +74,7 @@ final class CaptureCoordinator {
 
     // MARK: Modes
 
-    func beginOverlay(mode: OverlayMode, intent: CaptureIntent) {
+    func beginOverlay(mode: OverlayMode, intent: CaptureIntent, copyOnly: Bool = false) {
         guard !isBusy, ensurePermission() else { return }
         isStarting = true
         let frontmost = NSWorkspace.shared.frontmostApplication
@@ -69,7 +85,10 @@ final class CaptureCoordinator {
                 let snapshots = try await ScreenCaptureService.shared.snapshotAllDisplays(showCursor: settings.showCursor)
                 let controller = OverlayController(snapshots: snapshots, windows: windows, mode: mode, intent: intent) { [weak self] outcome in
                     self?.overlay = nil
-                    self?.handle(outcome, intent: intent, frontmost: frontmost)
+                    // The overlay finishes from the mouse-up or Return event, so this is the
+                    // Control key at the moment the selection was made.
+                    let control = NSEvent.modifierFlags.contains(.control)
+                    self?.handle(outcome, intent: intent, frontmost: frontmost, copyOnly: copyOnly || control)
                 }
                 overlay = controller
                 isStarting = false
@@ -81,7 +100,7 @@ final class CaptureCoordinator {
         }
     }
 
-    func captureFullscreen() {
+    func captureFullscreen(copyOnly: Bool = false) {
         guard !isBusy, ensurePermission(), let displayID = NSScreen.withMouse?.displayID else { return }
         let frontmost = NSWorkspace.shared.frontmostApplication
         isStarting = true
@@ -89,32 +108,32 @@ final class CaptureCoordinator {
             defer { isStarting = false }
             do {
                 let snapshot = try await ScreenCaptureService.shared.snapshotDisplay(displayID, showCursor: settings.showCursor)
-                deliver(CaptureResult(image: snapshot.image, scale: snapshot.scale, kind: .fullscreen, screenRect: snapshot.frame, appName: frontmost?.localizedName), frontmost: frontmost)
+                deliver(CaptureResult(image: snapshot.image, scale: snapshot.scale, kind: .fullscreen, screenRect: snapshot.frame, appName: frontmost?.localizedName), frontmost: frontmost, copyOnly: copyOnly)
             } catch {
                 ToastCenter.shared.showError("Capture failed", error)
             }
         }
     }
 
-    func captureActiveWindow() {
+    func captureActiveWindow(copyOnly: Bool = false) {
         guard !isBusy, ensurePermission() else { return }
         let frontmost = NSWorkspace.shared.frontmostApplication
         guard let pid = frontmost?.processIdentifier,
               let target = WindowList.onScreenWindows().first(where: { $0.pid == pid && $0.layer == 0 })
         else {
-            beginOverlay(mode: .window, intent: .capture)
+            beginOverlay(mode: .window, intent: .capture, copyOnly: copyOnly)
             return
         }
-        captureWindow(target, frontmost: frontmost)
+        captureWindow(target, frontmost: frontmost, copyOnly: copyOnly)
     }
 
-    private func captureWindow(_ target: WindowInfo, frontmost: NSRunningApplication?) {
+    private func captureWindow(_ target: WindowInfo, frontmost: NSRunningApplication?, copyOnly: Bool) {
         isStarting = true
         Task {
             defer { isStarting = false }
             do {
                 let captured = try await ScreenCaptureService.shared.captureWindow(target.id, includeShadow: settings.windowShadow)
-                deliver(CaptureResult(image: captured.image, scale: captured.scale, kind: .window, screenRect: target.frame, appName: target.owner), frontmost: frontmost)
+                deliver(CaptureResult(image: captured.image, scale: captured.scale, kind: .window, screenRect: target.frame, appName: target.owner), frontmost: frontmost, copyOnly: copyOnly)
             } catch {
                 ToastCenter.shared.showError("Window capture failed", error)
                 restoreFocus(frontmost)
@@ -122,12 +141,12 @@ final class CaptureCoordinator {
         }
     }
 
-    func repeatLastArea() {
+    func repeatLastArea(copyOnly: Bool = false) {
         guard let area = settings.lastArea,
               let screen = NSScreen.screen(for: area.displayID) ?? NSScreen.screens.first(where: { $0.frame.intersects(area.rect) }),
               let displayID = screen.displayID
         else {
-            beginOverlay(mode: .area, intent: .capture)
+            beginOverlay(mode: .area, intent: .capture, copyOnly: copyOnly)
             return
         }
         guard !isBusy, ensurePermission() else { return }
@@ -139,7 +158,7 @@ final class CaptureCoordinator {
                 let snapshot = try await ScreenCaptureService.shared.snapshotDisplay(displayID, showCursor: settings.showCursor)
                 let local = ScreenCoordinates.localTopLeft(fromCocoa: area.rect, screenFrame: snapshot.frame)
                 guard let image = snapshot.crop(local) else { throw CaptureError.emptySelection }
-                deliver(CaptureResult(image: image, scale: snapshot.scale, kind: .area, screenRect: area.rect, appName: frontmost?.localizedName), frontmost: frontmost)
+                deliver(CaptureResult(image: image, scale: snapshot.scale, kind: .area, screenRect: area.rect, appName: frontmost?.localizedName), frontmost: frontmost, copyOnly: copyOnly)
             } catch {
                 ToastCenter.shared.showError("Capture failed", error)
             }
@@ -148,14 +167,17 @@ final class CaptureCoordinator {
 
     // MARK: Outcomes
 
-    private func handle(_ outcome: OverlayOutcome, intent: CaptureIntent, frontmost: NSRunningApplication?) {
+    private func handle(_ outcome: OverlayOutcome, intent: CaptureIntent, frontmost: NSRunningApplication?, copyOnly: Bool) {
         switch outcome {
         case .cancelled, .finished:
             restoreFocus(frontmost)
+        case .display(let snapshot) where intent == .record:
+            restoreFocus(frontmost)
+            startRecording(display: snapshot, region: CGRect(origin: .zero, size: snapshot.frame.size))
         case .display(let snapshot):
-            deliver(CaptureResult(image: snapshot.image, scale: snapshot.scale, kind: .fullscreen, screenRect: snapshot.frame, appName: frontmost?.localizedName), frontmost: frontmost)
+            deliver(CaptureResult(image: snapshot.image, scale: snapshot.scale, kind: .fullscreen, screenRect: snapshot.frame, appName: frontmost?.localizedName), frontmost: frontmost, copyOnly: copyOnly)
         case .window(let window):
-            captureWindow(window, frontmost: frontmost)
+            captureWindow(window, frontmost: frontmost, copyOnly: copyOnly)
         case .area(let snapshot, let rect):
             guard let image = snapshot.crop(rect) else {
                 restoreFocus(frontmost)
@@ -165,7 +187,7 @@ final class CaptureCoordinator {
             switch intent {
             case .capture:
                 settings.lastArea = StoredArea(rect: screenRect, displayID: snapshot.displayID)
-                deliver(CaptureResult(image: image, scale: snapshot.scale, kind: .area, screenRect: screenRect, appName: frontmost?.localizedName), frontmost: frontmost)
+                deliver(CaptureResult(image: image, scale: snapshot.scale, kind: .area, screenRect: screenRect, appName: frontmost?.localizedName), frontmost: frontmost, copyOnly: copyOnly)
             case .recognizeText:
                 restoreFocus(frontmost)
                 recognizeText(in: image)
@@ -175,6 +197,9 @@ final class CaptureCoordinator {
             case .scrolling:
                 restoreFocus(frontmost)
                 startScrolling(display: snapshot, region: rect)
+            case .record:
+                restoreFocus(frontmost)
+                startRecording(display: snapshot, region: rect)
             }
         }
     }
@@ -188,6 +213,46 @@ final class CaptureCoordinator {
         }
         scrollSession = session
         session.start()
+    }
+
+    /// Records `region` (display-local y-down points) of a display, without Cuadro's own windows.
+    private func startRecording(display: DisplaySnapshot, region: CGRect) {
+        guard recorder == nil else { return }
+        isStarting = true
+        Task { [weak self] in
+            guard let self else { return }
+            defer { isStarting = false }
+            do {
+                let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+                guard let scDisplay = content.displays.first(where: { $0.displayID == display.displayID }) else {
+                    throw CaptureError.noDisplays
+                }
+                let ownPID = ProcessInfo.processInfo.processIdentifier
+                let filter = SCContentFilter(display: scDisplay, excludingApplications: content.applications.filter { $0.processID == ownPID }, exceptingWindows: [])
+                let directory = ImageExporter.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                let session = RecordingSession(
+                    filter: filter,
+                    configuration: .recording(region: region, scale: display.scale),
+                    outputURL: directory.appendingPathComponent("Recording.mp4")
+                )
+                let controller = ScreenRecordingController(session: session, area: display.globalRect(fromLocal: region), screenFrame: display.frame) { [weak self] in
+                    self?.recorder = nil
+                    NotificationCenter.default.post(name: .recordingChanged, object: nil)
+                }
+                recorder = controller
+                NotificationCenter.default.post(name: .recordingChanged, object: nil)
+                do {
+                    try await controller.start()
+                } catch {
+                    recorder = nil
+                    NotificationCenter.default.post(name: .recordingChanged, object: nil)
+                    throw error
+                }
+            } catch {
+                ToastCenter.shared.showError("Could not start recording", error)
+            }
+        }
     }
 
     func recognizeText(in image: CGImage) {
@@ -214,8 +279,21 @@ final class CaptureCoordinator {
     // MARK: Pipeline
 
     /// Sound, history, clipboard, auto-save, then editor / thumbnail / nothing.
-    func deliver(_ result: CaptureResult, frontmost: NSRunningApplication?) {
+    /// - Parameter copyOnly: only copy to the clipboard: no file, editor or thumbnail.
+    func deliver(_ result: CaptureResult, frontmost: NSRunningApplication?, copyOnly: Bool = false) {
         ShutterSound.play()
+        if copyOnly {
+            restoreFocus(frontmost)
+            Task {
+                if await Pasteboard.copyInBackground(image: result.image, scale: result.scale) {
+                    ToastCenter.shared.show("Copied to clipboard", detail: "\(result.image.width) × \(result.image.height) px")
+                } else {
+                    ToastCenter.shared.show("Could not copy the screenshot", style: .failure)
+                }
+                HistoryStore.shared.add(result.image, scale: result.scale)
+            }
+            return
+        }
         // Show the result right away; encoding for the clipboard and disk happens off the main actor.
         let afterCapture = settings.afterCapture
         switch afterCapture {

@@ -15,6 +15,7 @@ enum AppAction: String, CaseIterable, Identifiable, Codable {
     case measure
     case openFile
     case openClipboard
+    case recordScreen
 
     var id: String { rawValue }
 
@@ -32,6 +33,7 @@ enum AppAction: String, CaseIterable, Identifiable, Codable {
         case .measure: "Measure Screen"
         case .openFile: "Open Image…"
         case .openClipboard: "Open from Clipboard"
+        case .recordScreen: "Record Screen"
         }
     }
 
@@ -49,6 +51,7 @@ enum AppAction: String, CaseIterable, Identifiable, Codable {
         case .measure: "ruler"
         case .openFile: "folder"
         case .openClipboard: "doc.on.clipboard"
+        case .recordScreen: "record.circle"
         }
     }
 
@@ -63,6 +66,14 @@ enum AppAction: String, CaseIterable, Identifiable, Codable {
 
     static var defaultShortcuts: [AppAction: KeyCombo] {
         Dictionary(uniqueKeysWithValues: allCases.compactMap { action in action.defaultShortcut.map { (action, $0) } })
+    }
+
+    /// Takes a plain screenshot, so holding Control copies it without opening anything.
+    var supportsCopyOnly: Bool {
+        switch self {
+        case .captureArea, .captureWindow, .captureActiveWindow, .captureFullscreen, .repeatArea, .captureDelayed: true
+        default: false
+        }
     }
 
     var hotKeyID: UInt32 { UInt32((Self.allCases.firstIndex(of: self) ?? 0) + 1) }

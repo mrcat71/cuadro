@@ -6,6 +6,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private var statusItem: NSStatusItem?
     private let menu = NSMenu()
     private var observer: NSObjectProtocol?
+    private var recordingObserver: NSObjectProtocol?
     private let relativeFormatter: RelativeDateTimeFormatter = {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .abbreviated
@@ -19,26 +20,42 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         observer = NotificationCenter.default.addObserver(forName: .menuBarIconVisibilityChanged, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.updateVisibility() }
         }
+        recordingObserver = NotificationCenter.default.addObserver(forName: .recordingChanged, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.updateIcon() }
+        }
     }
 
     private func updateVisibility() {
         if AppSettings.shared.showMenuBarIcon {
             guard statusItem == nil else { return }
             let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-            let image = NSImage(systemSymbolName: "viewfinder", accessibilityDescription: "Cuadro")
-            image?.isTemplate = true
-            item.button?.image = image
             item.button?.toolTip = "Cuadro"
             item.menu = menu
             statusItem = item
+            updateIcon()
         } else if let statusItem {
             NSStatusBar.system.removeStatusItem(statusItem)
             self.statusItem = nil
         }
     }
 
+    /// A red record symbol while a screen recording runs.
+    private func updateIcon() {
+        guard let button = statusItem?.button else { return }
+        let recording = CaptureCoordinator.shared.isRecording
+        let image = NSImage(systemSymbolName: recording ? "record.circle" : "viewfinder", accessibilityDescription: recording ? "Cuadro, recording" : "Cuadro")
+        image?.isTemplate = true
+        button.image = image
+        button.contentTintColor = recording ? .systemRed : nil
+    }
+
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
+        if let elapsed = CaptureCoordinator.shared.recordingElapsed {
+            let stop = NSMenuItem.action("Stop Recording (\(RecordingHUDView.format(elapsed)))") { CaptureCoordinator.shared.toggleRecording() }
+            menu.addItem(stop.with(symbol: "stop.circle"))
+            menu.addItem(.separator())
+        }
         let screenRecording = PermissionCenter.shared.screenRecordingState
         if screenRecording != .granted {
             let title = screenRecording == .needsRelaunch ? "Relaunch to Finish Setup…" : "Allow Screen Recording…"
@@ -50,6 +67,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         }
         menu.addItem(delayedItem())
         menu.addItem(NSMenuItem.action("Pin Area to Screen") { CaptureCoordinator.shared.pinArea() }.with(symbol: "pin"))
+        menu.addItem(item(for: .recordScreen))
         menu.addItem(.separator())
         for action in [AppAction.recognizeText, .pickColor, .measure] {
             menu.addItem(item(for: action))
@@ -76,7 +94,10 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     }
 
     private func item(for action: AppAction) -> NSMenuItem {
-        let item = NSMenuItem.action(action.title) { CaptureCoordinator.shared.perform(action) }
+        let title = action == .recordScreen && CaptureCoordinator.shared.isRecording ? "Stop Recording" : action.title
+        let item = NSMenuItem.action(title) {
+            CaptureCoordinator.shared.perform(action, copyOnly: NSEvent.modifierFlags.contains(.control))
+        }
         item.image = NSImage(systemSymbolName: action.symbol, accessibilityDescription: nil)
         if let combo = AppSettings.shared.shortcuts[action], let key = KeyboardLayout.keyEquivalent(for: combo.keyCode) {
             item.keyEquivalent = key
@@ -95,7 +116,9 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         item.image = NSImage(systemSymbolName: "timer", accessibilityDescription: nil)
         let submenu = NSMenu()
         for seconds in [3, 5, 10] {
-            submenu.addItem(NSMenuItem.action("In \(seconds) Seconds") { CaptureCoordinator.shared.captureDelayed(seconds: seconds) })
+            submenu.addItem(NSMenuItem.action("In \(seconds) Seconds") {
+                CaptureCoordinator.shared.captureDelayed(seconds: seconds, copyOnly: NSEvent.modifierFlags.contains(.control))
+            })
         }
         item.submenu = submenu
         return item

@@ -65,4 +65,5 @@ extension RGBAColor {
 extension Notification.Name {
     static let menuBarIconVisibilityChanged = Notification.Name("CuadroMenuBarIconVisibilityChanged")
     static let historyChanged = Notification.Name("CuadroHistoryChanged")
+    static let recordingChanged = Notification.Name("CuadroRecordingChanged")
 }

@@ -8,7 +8,12 @@ enum OverlayMode {
 
 /// What happens with an area once it is selected.
 enum CaptureIntent {
-    case capture, recognizeText, scrolling, pin
+    case capture, recognizeText, scrolling, pin, record
+
+    /// Clicking a window or switching to window mode makes sense for this intent.
+    var selectsWindows: Bool { self == .capture || self == .pin || self == .record }
+    /// Return takes the whole display.
+    var takesWholeDisplay: Bool { self == .capture || self == .record }
 }
 
 enum OverlayOutcome {
@@ -203,7 +208,7 @@ final class OverlayController {
             spaceHeld = false
             if let selection, selection.width >= 3, selection.height >= 3 {
                 finish(.area(view.snapshot, selection.snapped(toScale: view.snapshot.scale)))
-            } else if let target = window(at: global), intent == .capture || intent == .pin {
+            } else if let target = window(at: global), intent.selectsWindows {
                 // A click without dragging takes the window under the pointer.
                 completeWindowSelection(target, in: view)
             } else {
@@ -230,7 +235,7 @@ final class OverlayController {
         switch intent {
         case .capture:
             finish(.window(target))
-        case .pin, .recognizeText, .scrolling:
+        case .pin, .recognizeText, .scrolling, .record:
             // Use the window's on-screen area from the frozen image.
             let local = view.localRect(fromGlobal: target.frame).intersection(view.bounds)
             guard !local.isNull, local.width >= 3, local.height >= 3 else { return }
@@ -260,7 +265,7 @@ final class OverlayController {
             guard !event.isARepeat else { return true }
             if isDragging {
                 spaceHeld = true
-            } else if mode == .area || mode == .window, intent == .capture || intent == .pin {
+            } else if mode == .area || mode == .window, intent.selectsWindows {
                 mode = mode == .area ? .window : .area
                 selection = nil
                 if mode == .window, let view = activeView {
@@ -271,7 +276,7 @@ final class OverlayController {
                 refresh()
             }
         case kVK_Return, kVK_ANSI_KeypadEnter:
-            if intent == .capture, mode == .area || mode == .window, let view = activeView {
+            if intent.takesWholeDisplay, mode == .area || mode == .window, let view = activeView {
                 finish(.display(view.snapshot))
             }
         case kVK_Tab:
@@ -443,11 +448,19 @@ final class OverlayController {
                 state.label = "\(Int(selection.width.rounded())) × \(Int(selection.height.rounded()))"
                 state.labelAnchor = selection
             }
-            state.hint = isDragging
-                ? "Space: move   Shift: square   Option: from center"
-                : "Drag to select   Click: window   Space: window mode   Return: full screen   Tab: copy color   Esc: cancel"
+            if intent == .record {
+                state.hint = isDragging
+                    ? "Space: move   Shift: square   Option: from center"
+                    : "Drag the area to record   Click: window   Return: full screen   Esc: cancel"
+            } else {
+                state.hint = isDragging
+                    ? "Space: move   Shift: square   Option: from center" + (intent == .capture ? "   Control: copy only" : "")
+                    : "Drag to select   Click: window   Space: window mode   Return: full screen   Tab: copy color   Esc: cancel"
+            }
         case .window:
-            state.hint = "Click a window   Space: area mode   Return: full screen   Esc: cancel"
+            state.hint = intent == .record
+                ? "Click the window to record   Space: area mode   Return: full screen   Esc: cancel"
+                : "Click a window   Space: area mode   Return: full screen   Esc: cancel"
         case .picker:
             state.hint = "Click: copy color   Shift-click: compare contrast   Arrows: nudge   Esc: cancel"
         case .ruler:

@@ -8,8 +8,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let permissions = PermissionCenter.shared
         NSApp.mainMenu = AppMenu.build()
         statusItem = StatusItemController()
-        HotKeyCenter.shared.handler = { action in
-            CaptureCoordinator.shared.perform(action)
+        HotKeyCenter.shared.handler = { action, copyOnly in
+            CaptureCoordinator.shared.perform(action, copyOnly: copyOnly)
         }
         HotKeyCenter.shared.apply(AppSettings.shared.shortcuts)
 
@@ -70,7 +70,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     @objc func performAppAction(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String, let action = AppAction(rawValue: raw) else { return }
-        CaptureCoordinator.shared.perform(action)
+        CaptureCoordinator.shared.perform(action, copyOnly: NSEvent.modifierFlags.contains(.control))
     }
 
     @objc func openImageFile(_ sender: Any?) {

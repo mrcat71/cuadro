@@ -111,7 +111,12 @@ final class OverlayView: NSView {
     }
 
     override func rightMouseDown(with event: NSEvent) {
-        controller?.cancel()
+        // AppKit may route a Control-click here; Control means "copy only", not cancel.
+        if event.type == .leftMouseDown {
+            mouseDown(with: event)
+        } else {
+            controller?.cancel()
+        }
     }
 
     override func keyDown(with event: NSEvent) {
