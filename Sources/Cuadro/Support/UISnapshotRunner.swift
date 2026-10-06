@@ -1,3 +1,4 @@
+import AVFoundation
 import AppKit
 import CuadroKit
 @preconcurrency import ScreenCaptureKit
@@ -63,6 +64,7 @@ enum UISnapshotRunner {
             configuration.width = Int(filter.contentRect.width * scale)
             configuration.height = Int(filter.contentRect.height * scale)
             configuration.shouldBeOpaque = false
+            configuration.showsCursor = false
             let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
             let name = (window.title?.isEmpty == false ? window.title! : "window-\(index)")
                 .replacingOccurrences(of: "/", with: "-")
@@ -71,6 +73,37 @@ enum UISnapshotRunner {
             try data.write(to: url)
             print("wrote \(url.path) (\(image.width)x\(image.height), window frame \(window.frame))")
         }
+        try await recordEditorWindow(windows, into: directory)
+    }
+
+    /// Records about two seconds of the editor window through the RecordingSession that Record
+    /// Screen uses, switching tools meanwhile so frames keep coming, and reads the movie back.
+    private static func recordEditorWindow(_ windows: [SCWindow], into directory: URL) async throws {
+        guard let window = windows.first(where: { $0.title == "UI Snapshot" }),
+              let model = (NSApp.windows.compactMap { $0.windowController as? EditorWindowController }.first?.model)
+        else { return }
+        let filter = SCContentFilter(desktopIndependentWindow: window)
+        let scale = CGFloat(filter.pointPixelScale)
+        let configuration = SCStreamConfiguration()
+        configuration.width = Int(filter.contentRect.width * scale) & ~1
+        configuration.height = Int(filter.contentRect.height * scale) & ~1
+        configuration.pixelFormat = kCVPixelFormatType_32BGRA
+        configuration.minimumFrameInterval = CMTime(value: 1, timescale: 30)
+        let url = directory.appendingPathComponent("recording.mp4")
+        if FileManager.default.fileExists(atPath: url.path) {
+            try FileManager.default.removeItem(at: url)
+        }
+        let session = RecordingSession(filter: filter, configuration: configuration, outputURL: url)
+        try await session.start()
+        for tool in [EditorTool.ellipse, .text, .arrow, .rectangle] {
+            try await Task.sleep(for: .milliseconds(500))
+            model.tool = tool
+        }
+        try await session.stop()
+        let asset = AVURLAsset(url: url)
+        let duration = try await asset.load(.duration).seconds
+        let tracks = try await asset.loadTracks(withMediaType: .video)
+        print("wrote \(url.path) (recording, \(String(format: "%.1f", duration)) s, \(tracks.count) video track)")
     }
 
     /// Renders a window's content layer tree into an image.
@@ -112,40 +145,30 @@ enum UISnapshotRunner {
         overlay.cancel()
     }
 
+    /// Markup on the sample, in the 800 × 500 pt layout of `SampleBoard`: an incident told with
+    /// Cuadro's tools.
     private static func decorate(_ model: EditorModel) {
-        var arrow = Annotation(kind: .arrow, start: CGPoint(x: 120, y: 90), end: CGPoint(x: 330, y: 200), style: model.style(for: .arrow))
-        arrow.bend = CGPoint(x: 260, y: 110)
-        let rectangle = Annotation(kind: .rectangle, start: CGPoint(x: 360, y: 160), end: CGPoint(x: 560, y: 260), style: model.style(for: .rectangle))
-        var text = Annotation(kind: .text, start: CGPoint(x: 90, y: 300), style: model.style(for: .text))
-        text.text = "Liquid Glass markup"
-        var counter = Annotation(kind: .counter, start: CGPoint(x: 600, y: 100), end: CGPoint(x: 640, y: 140), style: model.style(for: .counter))
-        counter.number = 1
-        let pixelate = Annotation(kind: .pixelate, start: CGPoint(x: 600, y: 300), end: CGPoint(x: 760, y: 380), style: model.style(for: .obscure))
-        let highlight = Annotation(kind: .highlighter, start: CGPoint(x: 80, y: 400), end: CGPoint(x: 400, y: 430), style: model.style(for: .highlighter))
-        for annotation in [arrow, rectangle, text, counter, pixelate, highlight] {
+        let token = Annotation(kind: .blur, start: CGPoint(x: 524, y: 432), end: CGPoint(x: 730, y: 453), style: model.style(for: .obscure))
+        let node = Annotation(kind: .rectangle, start: CGPoint(x: 28, y: 431), end: CGPoint(x: 392, y: 453), style: model.style(for: .rectangle))
+        let canary = Annotation(kind: .highlighter, start: CGPoint(x: 570, y: 271), end: CGPoint(x: 772, y: 292), style: model.style(for: .highlighter))
+        let loupe = Annotation(kind: .magnifier, start: CGPoint(x: 258, y: 266), end: CGPoint(x: 326, y: 334), style: model.style(for: .magnifier))
+        var spike = Annotation(kind: .counter, start: CGPoint(x: 292, y: 168), end: CGPoint(x: 259, y: 191), style: model.style(for: .counter))
+        spike.number = 1
+        var spikeNote = Annotation(kind: .text, start: CGPoint(x: 314, y: 192), style: model.style(for: .text))
+        spikeNote.text = "p95 doubled after 4f2a1c"
+        var drain = Annotation(kind: .counter, start: CGPoint(x: 410, y: 412), end: CGPoint(x: 393, y: 434), style: model.style(for: .counter))
+        drain.number = 2
+        var drainNote = Annotation(kind: .text, start: CGPoint(x: 226, y: 358), style: model.style(for: .text))
+        drainNote.text = "Disk full · drain it"
+        for annotation in [token, node, canary, loupe, spike, spikeNote, drain, drainNote] {
             model.add(annotation)
         }
-        model.selectedID = rectangle.id
-        model.tool = .rectangle
+        model.selectedID = nil
+        model.tool = .arrow
     }
 
-    /// A fake app window on a colorful background.
+    /// The infrastructure dashboard sample (`SampleBoard`), at `width` × `height` pixels.
     static func sampleImage(width: Int, height: Int) -> CGImage {
-        let space = CGColorSpace(name: CGColorSpace.sRGB)!
-        let ctx = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0, space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
-        let gradient = CGGradient(colorsSpace: space, colors: [RGBAColor(hex: "#4F7CFF")!.cgColor, RGBAColor(hex: "#E85DBA")!.cgColor] as CFArray, locations: nil)!
-        ctx.drawLinearGradient(gradient, start: .zero, end: CGPoint(x: width, y: height), options: [])
-        let card = CGRect(x: 160, y: 140, width: width - 320, height: height - 280)
-        ctx.setFillColor(CGColor(gray: 1, alpha: 0.96))
-        ctx.addPath(CGPath(roundedRect: card, cornerWidth: 28, cornerHeight: 28, transform: nil))
-        ctx.fillPath()
-        ctx.setFillColor(RGBAColor(hex: "#E5E7EB")!.cgColor)
-        for row in 0..<8 {
-            ctx.fill(CGRect(x: card.minX + 60, y: card.maxY - 140 - CGFloat(row) * 70, width: card.width - 120 - CGFloat(row % 3) * 120, height: 26))
-        }
-        ctx.setFillColor(RGBAColor(hex: "#007AFF")!.cgColor)
-        ctx.addPath(CGPath(roundedRect: CGRect(x: card.minX + 60, y: card.minY + 60, width: 220, height: 56), cornerWidth: 14, cornerHeight: 14, transform: nil))
-        ctx.fillPath()
-        return ctx.makeImage()!
+        SampleBoard.image(width: width, height: height)
     }
 }
