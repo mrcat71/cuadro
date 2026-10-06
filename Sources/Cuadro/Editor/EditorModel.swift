@@ -224,10 +224,21 @@ final class EditorModel {
         change(&document.annotations[index])
     }
 
-    func addCounter(at point: CGPoint) {
-        var counter = Annotation(kind: .counter, start: point, style: style(for: .counter))
+    /// A new step counter whose pointer tip marks `target`, with the badge beside it.
+    func makeCounter(pointingAt target: CGPoint) -> Annotation {
+        let style = style(for: .counter)
+        var counter = Annotation(kind: .counter, start: counterBadge(pointingAt: target, style: style), end: target, style: style)
         counter.number = document.nextCounterNumber
-        add(counter)
+        return counter
+    }
+
+    /// Default badge position for a step counter pointing at `target`, inside the visible image.
+    func counterBadge(pointingAt target: CGPoint, style: AnnotationStyle) -> CGPoint {
+        Annotation.counterBadgeCenter(
+            pointingAt: target,
+            radius: Annotation.counterRadius(fontSize: style.fontSize),
+            within: renderer.layout(for: document).cropRect
+        )
     }
 
     func deleteSelection() {

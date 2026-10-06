@@ -145,6 +145,19 @@ struct RendererTests {
         #expect(Self.isClose(pixels.color(x: 160, y: 30), counter.style.color, tolerance: 0.05))
     }
 
+    @Test func counterPointerReachesItsTarget() throws {
+        let renderer = DocumentRenderer(baseImage: Self.whiteImage(width: 200, height: 100), scale: 1)
+        var counter = Annotation(kind: .counter, start: CGPoint(x: 50, y: 50), end: CGPoint(x: 120, y: 50))
+        counter.number = 1
+        counter.style.shadow = false
+        let pixels = Self.pixels(try #require(renderer.render(DocumentState(annotations: [counter]))))
+        // Shaft between badge and head, the head just short of the tip, nothing past the tip.
+        #expect(Self.isClose(pixels.color(x: 80, y: 50), counter.style.color, tolerance: 0.05))
+        #expect(Self.isClose(pixels.color(x: 116, y: 50), counter.style.color, tolerance: 0.05))
+        #expect(Self.isClose(pixels.color(x: 124, y: 50), .white))
+        #expect(Self.isClose(pixels.color(x: 80, y: 58), .white))
+    }
+
     @Test func outlinedTextDrawsFillAndContrastingStroke() throws {
         let base = PixelBuffer(width: 220, height: 80, fill: .black).makeImage()!
         let renderer = DocumentRenderer(baseImage: base, scale: 1)

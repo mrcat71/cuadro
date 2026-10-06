@@ -296,7 +296,9 @@ final class CanvasView: NSView, NSTextViewDelegate {
             let id = model.beginNewText(at: point)
             startTextEditing(id, isNew: true)
         case .counter:
-            model.addCounter(at: point)
+            // The click marks the target; dragging before release places the badge.
+            model.draft = model.makeCounter(pointingAt: point)
+            interaction = .creating(origin: point)
         case .ruler where event.modifierFlags.contains(.option):
             model.stampRulerHover()
         default:
@@ -317,7 +319,14 @@ final class CanvasView: NSView, NSTextViewDelegate {
             break
         case .creating(let origin):
             guard var draft = model.draft else { return }
-            if draft.kind.isSegment {
+            if draft.kind == .counter {
+                // A short drag keeps the default spot, so a slightly shaky click still lands beside the target.
+                if point.distance(to: origin) >= Annotation.counterRadius(fontSize: draft.style.fontSize) * 1.5 {
+                    draft.start = shift ? Geometry.snapAngle(from: origin, to: point) : point
+                } else {
+                    draft.start = model.counterBadge(pointingAt: origin, style: draft.style)
+                }
+            } else if draft.kind.isSegment {
                 draft.end = shift ? Geometry.snapAngle(from: origin, to: point) : point
             } else if draft.kind == .pen {
                 if let last = draft.points.last, last.distance(to: point) >= 0.75 / magnification {
@@ -331,7 +340,7 @@ final class CanvasView: NSView, NSTextViewDelegate {
             }
             model.draft = draft
         case .moving(let id, let last, let before, _):
-            model.mutateAnnotation(id) { $0.translate(by: point - last) }
+            model.mutateAnnotation(id) { $0.dragBody(by: point - last) }
             interaction = .moving(id: id, last: point, before: before, moved: true)
         case .resizing(let id, let handle, _):
             model.mutateAnnotation(id) { $0.move(handle, to: point, constrained: shift) }

@@ -335,6 +335,18 @@ public final class DocumentRenderer {
         let circle = CGRect(x: annotation.start.x - radius, y: annotation.start.y - radius, width: radius * 2, height: radius * 2)
         ctx.beginTransparencyLayer(auxiliaryInfo: nil)
         ctx.setFillColor(style.color.cgColor)
+        // The pointer starts at the badge's center, so the badge drawn on top hides its tail.
+        if annotation.hasCounterPointer, annotation.start.distance(to: annotation.end) > radius {
+            let width = Annotation.counterPointerWidth(radius: radius)
+            let pointer = ArrowGeometry.straightArrowPath(from: annotation.start, to: annotation.end, lineWidth: width, doubleHeaded: false)
+            ctx.setStrokeColor(style.color.cgColor)
+            ctx.setLineJoin(.round)
+            ctx.addPath(pointer)
+            ctx.fillPath()
+            ctx.addPath(pointer)
+            ctx.setLineWidth(max(1, width * 0.3))
+            ctx.strokePath()
+        }
         ctx.fillEllipse(in: circle)
         let ring = max(1.5, radius * 0.12)
         ctx.setStrokeColor(CGColor(gray: 1, alpha: 0.95))

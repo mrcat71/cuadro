@@ -12,6 +12,23 @@ public enum AnnotationHandle: Hashable, Sendable {
 public extension Annotation {
     static func counterRadius(fontSize: CGFloat) -> CGFloat { max(10, fontSize * 0.8) }
 
+    /// Shaft width of a step counter's pointer for a badge of `radius`.
+    static func counterPointerWidth(radius: CGFloat) -> CGFloat { max(2, radius * 0.2) }
+
+    /// Badge center for a new step counter pointing at `target`: diagonally beside it, up and to
+    /// the left unless that leaves `bounds`, otherwise the first other diagonal that fits.
+    static func counterBadgeCenter(pointingAt target: CGPoint, radius: CGFloat, within bounds: CGRect) -> CGPoint {
+        let reach = radius * 2.6 / 2.squareRoot()
+        let candidates = [(-1, -1), (1, -1), (-1, 1), (1, 1)].map { dx, dy in
+            CGPoint(x: target.x + CGFloat(dx) * reach, y: target.y + CGFloat(dy) * reach)
+        }
+        let inner = bounds.insetBy(dx: radius, dy: radius)
+        return candidates.first { inner.contains($0) } ?? candidates[0]
+    }
+
+    /// Step counter whose badge (`start`) sits away from the target its pointer tip marks (`end`).
+    var hasCounterPointer: Bool { kind == .counter && start != end }
+
     /// Control point of a curved arrow, if any.
     var curveControl: CGPoint? {
         guard kind == .arrow, let bend else { return nil }
@@ -43,7 +60,10 @@ public extension Annotation {
             return CGRect(origin: start, size: TextLayout.size(of: text, style: style))
         case .counter:
             let radius = Self.counterRadius(fontSize: style.fontSize)
-            return CGRect(x: start.x - radius, y: start.y - radius, width: radius * 2, height: radius * 2)
+            let badge = CGRect(x: start.x - radius, y: start.y - radius, width: radius * 2, height: radius * 2)
+            guard hasCounterPointer else { return badge }
+            let pad = Self.counterPointerWidth(radius: radius) / 2 + 1
+            return badge.union(CGRect(x: end.x - pad, y: end.y - pad, width: pad * 2, height: pad * 2))
         case .rectangle, .ellipse:
             return rect.insetBy(dx: -style.lineWidth / 2, dy: -style.lineWidth / 2)
         case .magnifier:
@@ -77,7 +97,11 @@ public extension Annotation {
             let band = (style.lineWidth / 2 + tolerance) / (min(r.width, r.height) / 2)
             return abs(distance - 1) <= band
         case .counter:
-            return point.distance(to: start) <= Self.counterRadius(fontSize: style.fontSize) + tolerance
+            let radius = Self.counterRadius(fontSize: style.fontSize)
+            if point.distance(to: start) <= radius + tolerance { return true }
+            guard hasCounterPointer else { return false }
+            let reach = max(Self.counterPointerWidth(radius: radius), 4) + tolerance
+            return Geometry.distance(from: point, toSegment: start, end) <= reach
         case .magnifier:
             let r = rect.insetBy(dx: -tolerance, dy: -tolerance)
             guard r.width > 0, r.height > 0 else { return false }
@@ -96,7 +120,10 @@ public extension Annotation {
             return [(.start, start), (.end, end), (.bend, bend ?? start.midpoint(end))]
         case .line, .measure:
             return [(.start, start), (.end, end)]
-        case .pen, .text, .counter:
+        case .counter:
+            // The badge itself moves with a body drag; only the pointer tip has a handle.
+            return hasCounterPointer ? [(.end, end)] : []
+        case .pen, .text:
             return []
         default:
             return RectHandle.allCases.map { (.corner($0), $0.point(in: rect)) }
@@ -117,6 +144,16 @@ public extension Annotation {
         end = end + delta
         bend = bend.map { $0 + delta }
         points = points.map { $0 + delta }
+    }
+
+    /// Moves the annotation for a drag on its body. A step counter's badge moves on its own, so
+    /// its pointer stays on the target.
+    mutating func dragBody(by delta: CGPoint) {
+        if hasCounterPointer {
+            start = start + delta
+        } else {
+            translate(by: delta)
+        }
     }
 
     /// Drags `handle` to `point`. `constrained` snaps angles or keeps the aspect ratio (Shift).

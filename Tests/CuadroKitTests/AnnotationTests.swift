@@ -41,6 +41,59 @@ struct AnnotationTests {
         #expect(counter.bounds == CGRect(x: 34, y: 34, width: 32, height: 32))
     }
 
+    @Test func counterPointerGeometry() {
+        var counter = Annotation(kind: .counter, start: CGPoint(x: 50, y: 50), end: CGPoint(x: 100, y: 50))
+        counter.style.fontSize = 20
+        #expect(counter.hasCounterPointer)
+        #expect(counter.hitTest(CGPoint(x: 90, y: 51), tolerance: 0))
+        #expect(!counter.hitTest(CGPoint(x: 90, y: 60), tolerance: 0))
+        #expect(counter.bounds.contains(CGPoint(x: 100, y: 50)))
+        #expect(counter.handles.map { $0.handle } == [.end])
+
+        // Dragging the badge keeps the tip on its target; the tip handle retargets.
+        counter.dragBody(by: CGPoint(x: 0, y: -30))
+        #expect(counter.start == CGPoint(x: 50, y: 20))
+        #expect(counter.end == CGPoint(x: 100, y: 50))
+        counter.move(.end, to: CGPoint(x: 120, y: 80), constrained: false)
+        #expect(counter.end == CGPoint(x: 120, y: 80))
+
+        var plain = Annotation(kind: .counter, start: CGPoint(x: 10, y: 10))
+        #expect(!plain.hasCounterPointer)
+        #expect(plain.handles.isEmpty)
+        plain.dragBody(by: CGPoint(x: 5, y: 5))
+        #expect(plain.start == CGPoint(x: 15, y: 15))
+        #expect(plain.end == CGPoint(x: 15, y: 15))
+    }
+
+    struct BadgeCase: Sendable, CustomTestStringConvertible {
+        let name: String
+        let target: CGPoint
+        let left: Bool
+        let up: Bool
+        var testDescription: String { name }
+    }
+
+    @Test(arguments: [
+        BadgeCase(name: "middle", target: CGPoint(x: 100, y: 50), left: true, up: true),
+        BadgeCase(name: "near the top", target: CGPoint(x: 100, y: 10), left: true, up: false),
+        BadgeCase(name: "near the left", target: CGPoint(x: 10, y: 50), left: false, up: true),
+        BadgeCase(name: "top-left corner", target: CGPoint(x: 5, y: 5), left: false, up: false),
+        BadgeCase(name: "bottom-right corner", target: CGPoint(x: 195, y: 95), left: true, up: true),
+    ])
+    func counterBadgePlacement(_ testCase: BadgeCase) {
+        let bounds = CGRect(x: 0, y: 0, width: 200, height: 100)
+        let badge = Annotation.counterBadgeCenter(pointingAt: testCase.target, radius: 10, within: bounds)
+        #expect((badge.x < testCase.target.x) == testCase.left)
+        #expect((badge.y < testCase.target.y) == testCase.up)
+        #expect(abs(badge.distance(to: testCase.target) - 26) < 0.001)
+        #expect(bounds.insetBy(dx: 10, dy: 10).contains(badge))
+    }
+
+    @Test func counterBadgeFallsBackWhenNothingFits() {
+        let badge = Annotation.counterBadgeCenter(pointingAt: CGPoint(x: 10, y: 10), radius: 10, within: CGRect(x: 0, y: 0, width: 20, height: 20))
+        #expect(badge.x < 10 && badge.y < 10)
+    }
+
     @Test func handlesPerKind() {
         #expect(Self.make(.arrow, .zero, CGPoint(x: 10, y: 0)).handles.count == 3)
         #expect(Self.make(.line, .zero, CGPoint(x: 10, y: 0)).handles.count == 2)
