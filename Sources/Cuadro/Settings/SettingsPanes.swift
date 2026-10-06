@@ -7,6 +7,7 @@ private let paneWidth: CGFloat = 540
 struct GeneralSettingsPane: View {
     @Bindable private var settings = AppSettings.shared
     @State private var launchAtLogin = LoginItem.isEnabled
+    @State private var checksForUpdates = Updater.shared.checksAutomatically
 
     var body: some View {
         Form {
@@ -24,6 +25,15 @@ struct GeneralSettingsPane: View {
                 }
                 Toggle("Show in the Dock while an editor is open", isOn: $settings.showDockIconWhileEditing)
                     .onChange(of: settings.showDockIconWhileEditing) { _, _ in DockPresence.shared.update() }
+            }
+            if Updater.shared.isAvailable {
+                Section("Updates") {
+                    Toggle("Check for updates automatically", isOn: $checksForUpdates)
+                        .onChange(of: checksForUpdates) { _, enabled in
+                            Updater.shared.checksAutomatically = enabled
+                        }
+                    Button("Check for Updates…") { Updater.shared.checkForUpdates() }
+                }
             }
             Section("After a capture") {
                 Toggle("Copy to the clipboard", isOn: $settings.copyToClipboard)
@@ -293,18 +303,7 @@ struct AboutSettingsPane: View {
             Text(version)
                 .foregroundStyle(.secondary)
             Text("A free, native screenshot tool for macOS.")
-            VStack(spacing: 0) {
-                PermissionRow(title: "Screen Recording", detail: "Required for captures.", granted: status.screenRecording, actionTitle: "Open Settings…") {
-                    PermissionCenter.shared.requestScreenRecording()
-                    PermissionCenter.shared.openScreenRecordingSettings()
-                }
-                Divider().padding(.horizontal, 14)
-                PermissionRow(title: "Accessibility", detail: "Only for auto-scroll.", granted: status.accessibility, actionTitle: "Open Settings…") {
-                    PermissionCenter.shared.requestAccessibility()
-                    PermissionCenter.shared.openAccessibilitySettings()
-                }
-            }
-            .glassEffect(.regular, in: .rect(cornerRadius: 16))
+            PermissionList(status: status)
             Link("github.com/mrcat71/cuadro", destination: URL(string: "https://github.com/mrcat71/cuadro")!)
         }
         .padding(28)

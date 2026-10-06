@@ -90,6 +90,8 @@ final class AppSettings {
     var thumbnailSeconds: Double { didSet { defaults.set(thumbnailSeconds, forKey: Keys.thumbnailSeconds) } }
     var annotationShadows: Bool { didSet { defaults.set(annotationShadows, forKey: Keys.annotationShadows) } }
     var autoScrollSpeed: Double { didSet { defaults.set(autoScrollSpeed, forKey: Keys.autoScrollSpeed) } }
+    /// Last onboarding version the user finished (0: never), see `PermissionCenter.onboardingVersion`.
+    var completedOnboardingVersion: Int { didSet { defaults.set(completedOnboardingVersion, forKey: Keys.completedOnboardingVersion) } }
 
     private(set) var shortcuts: [AppAction: KeyCombo]
     private(set) var toolStyles: [String: AnnotationStyle]
@@ -124,6 +126,7 @@ final class AppSettings {
         thumbnailSeconds = defaults.object(forKey: Keys.thumbnailSeconds) as? Double ?? 6
         annotationShadows = defaults.object(forKey: Keys.annotationShadows) as? Bool ?? true
         autoScrollSpeed = defaults.object(forKey: Keys.autoScrollSpeed) as? Double ?? 1
+        completedOnboardingVersion = defaults.integer(forKey: Keys.completedOnboardingVersion)
         shortcuts = Self.loadShortcuts(from: defaults)
         toolStyles = Self.load([String: AnnotationStyle].self, from: defaults, key: Keys.toolStyles) ?? [:]
         lastArea = Self.load(StoredArea.self, from: defaults, key: Keys.lastArea)
@@ -234,6 +237,7 @@ final class AppSettings {
         static let thumbnailSeconds = "thumbnailSeconds"
         static let annotationShadows = "annotationShadows"
         static let autoScrollSpeed = "autoScrollSpeed"
+        static let completedOnboardingVersion = "completedOnboardingVersion"
         static let shortcuts = "shortcuts"
         static let toolStyles = "toolStyles"
         static let lastArea = "lastArea"

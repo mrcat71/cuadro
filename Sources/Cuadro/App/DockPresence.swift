@@ -1,11 +1,16 @@
 import AppKit
 
-/// Shows the Dock icon and main menu while editor or settings windows are open, and goes
-/// back to a menu bar only app when they close.
+/// Shows the Dock icon and main menu while editor or settings windows are open, or an update
+/// is on screen, and goes back to a menu bar only app when they close.
 final class DockPresence {
     static let shared = DockPresence()
 
     private var windows: [ObjectIdentifier: NSObjectProtocol] = [:]
+
+    /// Set while Sparkle shows an update, so its window is not lost behind other apps.
+    var isShowingUpdate = false {
+        didSet { update() }
+    }
 
     func track(_ window: NSWindow) {
         let id = ObjectIdentifier(window)
@@ -23,7 +28,8 @@ final class DockPresence {
     }
 
     func update() {
-        let policy: NSApplication.ActivationPolicy = !windows.isEmpty && AppSettings.shared.showDockIconWhileEditing ? .regular : .accessory
+        let editing = !windows.isEmpty && AppSettings.shared.showDockIconWhileEditing
+        let policy: NSApplication.ActivationPolicy = editing || isShowingUpdate ? .regular : .accessory
         if NSApp.activationPolicy() != policy {
             NSApp.setActivationPolicy(policy)
         }

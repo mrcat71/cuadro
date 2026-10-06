@@ -39,6 +39,12 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
+        let screenRecording = PermissionCenter.shared.screenRecordingState
+        if screenRecording != .granted {
+            let title = screenRecording == .needsRelaunch ? "Relaunch to Finish Setup…" : "Allow Screen Recording…"
+            menu.addItem(NSMenuItem.action(title) { OnboardingWindowController.shared.show() }.with(symbol: "exclamationmark.triangle"))
+            menu.addItem(.separator())
+        }
         for action in [AppAction.captureArea, .captureWindow, .captureActiveWindow, .captureFullscreen, .captureScrolling, .repeatArea] {
             menu.addItem(item(for: action))
         }
@@ -62,6 +68,10 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             NSApp.activate()
             NSApp.orderFrontStandardAboutPanel(nil)
         })
+        if Updater.shared.isAvailable {
+            // Targets the app delegate, which disables it while a check is running.
+            menu.addItem(NSMenuItem(title: "Check for Updates…", action: #selector(AppDelegate.checkForUpdates(_:)), keyEquivalent: ""))
+        }
         menu.addItem(NSMenuItem.action("Quit Cuadro", keyEquivalent: "q") { NSApp.terminate(nil) })
     }
 

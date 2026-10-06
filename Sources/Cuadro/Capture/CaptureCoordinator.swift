@@ -44,9 +44,14 @@ final class CaptureCoordinator {
         }
     }
 
+    /// Shows the permissions window instead of capturing until Screen Recording works, including
+    /// after a fresh grant that still needs a relaunch.
     private func ensurePermission() -> Bool {
-        if PermissionCenter.shared.hasScreenRecording { return true }
-        PermissionCenter.shared.requestScreenRecording()
+        let permissions = PermissionCenter.shared
+        if permissions.canCapture { return true }
+        if permissions.screenRecordingState == .missing {
+            permissions.requestScreenRecording()
+        }
         OnboardingWindowController.shared.show()
         return false
     }

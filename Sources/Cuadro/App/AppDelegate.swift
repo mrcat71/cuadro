@@ -1,11 +1,12 @@
 import AppKit
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var statusItem: StatusItemController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Record the launch-time Screen Recording state before anything else asks for it.
+        let permissions = PermissionCenter.shared
         NSApp.mainMenu = AppMenu.build()
-        ImageExporter.removeStaleTemporaryFiles()
         statusItem = StatusItemController()
         HotKeyCenter.shared.handler = { action in
             CaptureCoordinator.shared.perform(action)
@@ -17,7 +18,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             UISnapshotRunner.run(outputDirectory: URL(fileURLWithPath: arguments[index + 1], isDirectory: true))
             return
         }
-        if !PermissionCenter.shared.hasScreenRecording {
+        // After the snapshot check: a snapshot run must not delete the files of a running Cuadro.
+        ImageExporter.removeStaleTemporaryFiles()
+        Updater.shared.start()
+        if permissions.needsOnboarding {
             OnboardingWindowController.shared.show()
         }
         Log.app.notice("Cuadro started")
@@ -45,6 +49,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func showAbout(_ sender: Any?) {
         NSApp.activate()
         NSApp.orderFrontStandardAboutPanel(nil)
+    }
+
+    @objc func checkForUpdates(_ sender: Any?) {
+        Updater.shared.checkForUpdates()
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(checkForUpdates(_:)) {
+            return Updater.shared.canCheckForUpdates
+        }
+        return true
     }
 
     @objc func showHelp(_ sender: Any?) {

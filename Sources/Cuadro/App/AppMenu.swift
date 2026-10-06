@@ -21,6 +21,7 @@ enum AppMenu {
     private static func appItems() -> [NSMenuItem] {
         [
             item("About Cuadro", #selector(AppDelegate.showAbout(_:))),
+            item("Check for Updates…", #selector(AppDelegate.checkForUpdates(_:))),
             .separator(),
             item("Settings…", #selector(AppDelegate.showSettings(_:)), ","),
             .separator(),
