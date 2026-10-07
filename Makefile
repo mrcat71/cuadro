@@ -29,8 +29,10 @@ endif
 # Notarization needs a secure timestamp: CODESIGN_TIMESTAMP=--timestamp
 CODESIGN_TIMESTAMP ?= --timestamp=none
 SIGN = codesign --force --options runtime $(CODESIGN_TIMESTAMP) --sign "$(SIGN_IDENTITY)"
-# An ad-hoc signature has no team ID, so the hardened runtime's library validation refuses to
-# load Sparkle ("different Team IDs"). A real identity signs app and framework with one team.
+# The hardened runtime needs the audio-input entitlement for the microphone. An ad-hoc signature
+# also has no team ID, so library validation would refuse to load Sparkle ("different Team IDs"):
+# AdHoc.entitlements turns that off too. A real identity signs app and framework with one team.
+APP_ENTITLEMENTS := --entitlements Resources/Cuadro.entitlements
 ifeq ($(SIGN_IDENTITY),-)
   APP_ENTITLEMENTS := --entitlements Resources/AdHoc.entitlements
 endif
