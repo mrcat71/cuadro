@@ -7,7 +7,7 @@ Free, native screenshot tool for macOS 26 and later, with Shottr's feature set a
 ## Features
 
 - **Capture:** area (frozen screen with magnifier and pixel grid), window (with or without shadow, transparent corners), active window, full screen, repeat last area, delayed (3, 5 or 10 s), scrolling capture with live stitching and optional auto-scroll, pin an area directly to the screen. Hold Control to copy a screenshot without opening anything.
-- **Screen recording:** an area, a window or a whole display to MP4, with the pointer, highlighted clicks, system audio and the microphone as options.
+- **Screen recording:** an area, a window or a whole display to MP4, with or without the microphone. Adjust the area before recording starts and move it while it records; the movie pans smoothly after it. The pointer, highlighted clicks and system audio are options.
 - **Screen tools:** color picker (HEX, RGB, HSL or OKLCH, plus WCAG contrast against a reference color), screen ruler that snaps to edges, text recognition (OCR) with QR and barcode reading.
 - **Editor:** arrow (straight, curved, double), line, rectangle, ellipse, pen, highlighter, text (plain, outlined, label), step counter, pixelate, blur, smart erase, spotlight, magnifier, measurement, crop with aspect presets and auto-trim, pasted image overlays, backdrop (gradient, solid or transparent, padding, corners, shadow, aspect ratio), resize, undo and redo.
 - **Output:** clipboard, quick save with file name templates, Save As (PNG, JPEG, HEIC), drag and drop, share sheet, print, open in Preview, pin as a floating window, optional 1x downscale for Retina captures, recent captures history.
@@ -40,7 +40,7 @@ Install to `~/Applications` before turning on **Launch at login**: the login ite
 
 A free Apple ID is enough for an Apple Development identity: Xcode > Settings > Accounts, add the Apple ID, then Manage Certificates > + > Apple Development.
 
-Ad-hoc builds carry one extra entitlement, `com.apple.security.cs.disable-library-validation` (`Resources/AdHoc.entitlements`): an ad-hoc signature has no team ID, so the hardened runtime would refuse to load the embedded Sparkle.framework. Builds signed with a real identity do not get it.
+Every build carries `com.apple.security.device.audio-input` (`Resources/Cuadro.entitlements`): without it the hardened runtime refuses the microphone, and macOS never even asks. Ad-hoc builds sign with `Resources/AdHoc.entitlements` instead, which adds `com.apple.security.cs.disable-library-validation`: an ad-hoc signature has no team ID, so the hardened runtime would refuse to load the embedded Sparkle.framework. Builds signed with a real identity do not get that one.
 
 ## Permissions
 
@@ -48,7 +48,7 @@ Ad-hoc builds carry one extra entitlement, `com.apple.security.cs.disable-librar
 | --- | --- | --- |
 | Screen Recording | Every capture | System Settings > Privacy & Security > Screen & System Audio Recording |
 | Accessibility | Auto-scroll in scrolling capture only | System Settings > Privacy & Security > Accessibility |
-| Microphone | Only **Record the microphone** in screen recordings | System Settings > Privacy & Security > Microphone |
+| Microphone | Only **Record Screen with Microphone**, or the microphone switch next to **Record** | System Settings > Privacy & Security > Microphone |
 
 Nothing else is needed: global shortcuts are Carbon hot keys, which work without Input Monitoring. System audio in recordings comes with Screen Recording.
 
@@ -82,7 +82,7 @@ Global shortcuts work in every app and are set in **Settings > Shortcuts**. Defa
 
 **Copy only:** hold Control as you finish a selection, or add Control to a capture shortcut (⌃⇧⌘2 for the default area shortcut), and the screenshot goes to the clipboard with nothing opening and nothing saved. Holding Control while picking a capture from the menu does the same.
 
-**Screen recording:** choose **Record Screen**, then drag an area, click a window or press Return for the whole display. Recording starts right away, with a red border around the area and a timer with **Stop** next to it; Stop, the menu bar menu or the Record Screen shortcut ends it. The MP4 lands in the screenshots folder, is copied to the clipboard as a file and is shown in Finder. Settings > Capture sets the pointer, click highlighting, system audio and the microphone. Areas larger than 4096 × 2304 pixels are encoded as HEVC, smaller ones as H.264.
+**Screen recording:** choose **Record Screen** or **Record Screen with Microphone**, then drag an area, click a window or press Return for the whole display. The area stays up for adjusting while the rest of the display dims: drag inside it to move it, drag a handle to resize it, drag outside it for a new one, arrows nudge it (Shift: 10 pt). The bar below it shows the size, a microphone switch, **Cancel** (Esc or right-click) and **Record** (Return or either Record Screen shortcut). While recording, a red border marks the area and the bar shows the timer and **Stop**; drag the bar to move the area and the movie pans smoothly after it, within the display where the area was selected. Stop, the menu bar menu or either Record Screen shortcut ends the recording. The MP4 lands in the screenshots folder, is copied to the clipboard as a file and is shown in Finder. Settings > Capture sets the pointer, click highlighting and system audio. With system audio and the microphone the movie has two audio tracks, the microphone first, since some players only play the first one. Areas larger than 4096 × 2304 pixels are encoded as HEVC, smaller ones as H.264.
 
 **Color picker:** click copies the color in the format chosen in Settings; Shift-click sets a reference color and the loupe then shows the contrast ratio.
 
@@ -118,7 +118,7 @@ Global shortcuts work in every app and are set in **Settings > Shortcuts**. Defa
 
 | Target | Path | Role |
 | --- | --- | --- |
-| `CuadroKit` | `Sources/CuadroKit` | Pure logic with no AppKit: geometry, annotation model and hit testing, `DocumentRenderer` (CoreGraphics, CoreText, CoreImage), `ScrollStitcher`, edge finder, color formats, file name templates, key combos, OCR text assembly. Fully unit-tested. |
+| `CuadroKit` | `Sources/CuadroKit` | Pure logic with no AppKit: geometry, annotation model and hit testing, `DocumentRenderer` (CoreGraphics, CoreText, CoreImage), `ScrollStitcher`, edge finder, color formats, file name templates, key combos, OCR text assembly, recording frame geometry and smoothing. Fully unit-tested. |
 | `Cuadro` | `Sources/Cuadro` | The app: AppKit lifecycle with SwiftUI views and `defaultIsolation(MainActor)`; Sparkle (the only package dependency) for updates. |
 | `cuadro-icon` | `Sources/cuadro-icon` | Draws the app icon PNG set; `make` turns it into `AppIcon.icns`. |
 | `CuadroKitTests` | `Tests/CuadroKitTests` | Table-driven Swift Testing suites. |
@@ -126,7 +126,7 @@ Global shortcuts work in every app and are set in **Settings > Shortcuts**. Defa
 Inside the app:
 
 - `App/`: lifecycle, menus, `DockPresence` and `Updater` (Sparkle, with gentle reminders for a menu bar app).
-- `Capture/`: `ScreenCaptureService` (ScreenCaptureKit display and window screenshots), `CaptureCoordinator` (every mode and the post-capture pipeline), `Overlay/` (frozen-screen selection, picker and ruler), `Scrolling/` (SCStream plus stitching off the main actor), `Recording/` (SCStream writing straight to MP4 through `SCRecordingOutput`).
+- `Capture/`: `ScreenCaptureService` (ScreenCaptureKit display and window screenshots), `CaptureCoordinator` (every mode and the post-capture pipeline), `Overlay/` (frozen-screen selection, picker and ruler), `Scrolling/` (SCStream plus stitching off the main actor), `Recording/` (the adjust stage and the recording controls; an SCStream of the whole display whose frames `RecordingWriter` crops to the area and writes to MP4 with AVAssetWriter. `SCRecordingOutput` would be simpler, but it ends its movie on any change to the stream configuration, so it cannot follow a moving area).
 - `Editor/`: `EditorModel` (document state as a value, undo snapshots), `Canvas/` (NSScrollView canvas drawing through `DocumentRenderer`, so the canvas and the export match), `Chrome/` (floating Liquid Glass palettes).
 - `Hotkeys/` (Carbon `RegisterEventHotKey`, no Accessibility needed), `Permissions/`, `Output/`, `Pin/`, `QuickAccess/`, `OCR/` (Vision), `Settings/`, `HUD/`.
 
@@ -151,6 +151,8 @@ Publishing requires the `SPARKLE_PRIVATE_KEY` secret (see [Updates](#updates)); 
 | `MACOS_CERTIFICATE_P12`, `MACOS_CERTIFICATE_PASSWORD` with your Apple Development certificate | Stable signature, so the Screen Recording grant survives updates on your Macs. Other Macs still need Open Anyway. |
 | The two above with a Developer ID Application certificate, plus `NOTARY_APPLE_ID`, `NOTARY_TEAM_ID`, `NOTARY_PASSWORD` (app-specific password) | Notarized and stapled; opens normally on any Mac. Needs a paid Apple Developer Program membership. |
 
+Moving from ad-hoc signing to a certificate is a signature change too: the update that brings it asks for Screen Recording one last time, and later ones keep it. Sparkle accepts that update because the EdDSA key stays the same; it allows changing the Apple certificate or the EdDSA key in one update, never both.
+
 To add a certificate, export it from Keychain Access (My Certificates, right-click the certificate, Export, `.p12` with a password), then:
 
 ```sh
@@ -171,7 +173,7 @@ make dist appcast           # dmg, zip and a feed signed with the keychain key
 
 Logs: `/usr/bin/log show --last 10m --predicate 'subsystem == "io.github.mrcat71.cuadro"'`. Use the full path in zsh, where `log` is a shell builtin.
 
-UI self-check: `build/Cuadro.app/Contents/MacOS/Cuadro --ui-snapshot /tmp/cuadro-ui` opens the editor, settings, onboarding, a pin, a toast, a thumbnail and the selection overlay with a synthetic screenshot, writes a PNG per window, prints the editor's zoom (100% unless the screen is too small for the 800 × 500 pt sample) and quits. With Screen Recording allowed it captures the real windows and also records two seconds of its own editor window to `recording.mp4`; without it, it renders the layer trees in-process, where Liquid Glass surfaces appear flat, and skips the recording. The README pictures in `docs/images` come from this run.
+UI self-check: `build/Cuadro.app/Contents/MacOS/Cuadro --ui-snapshot /tmp/cuadro-ui` opens the editor, settings, onboarding, a pin, a toast, a thumbnail, a recording frame being adjusted (which dims the main screen for about two seconds), the controls of a recording and the selection overlay with a synthetic screenshot, writes a PNG per window, prints the editor's zoom (100% unless the screen is too small for the 800 × 500 pt sample) and quits. With Screen Recording allowed it captures the real windows and also records about two seconds through the Record Screen pipeline: whole-display frames that show only its editor window, with the crop panning across it as if the controls were dragged. It writes `recording.mp4`, prints its size and frame counts, and saves its first and last frames as `recording-first.png` and `recording-last.png`, which should show opposite corners of the editor. Without Screen Recording it renders the layer trees in-process, where Liquid Glass surfaces appear flat, and skips the recording. The README pictures in `docs/images` come from this run.
 
 ## Manual test checklist
 
@@ -185,7 +187,7 @@ Run these after changes to capture or the editor; they need a real screen and in
 - [ ] Multiple displays (and a non-Retina display if available): overlay on every screen, correct crop and scale.
 - [ ] Delayed capture of an open menu.
 - [ ] Control: ⌃⇧⌘2 and Control held at the end of a selection copy only (toast, no editor, no file); ⌃⇧⌘1 does the same for the full screen.
-- [ ] Record Screen: an area, a window and a full display; Stop from the panel, the menu and the shortcut; the MP4 plays with the pointer and clicks; system audio and the microphone when turned on.
+- [ ] Record Screen and Record Screen with Microphone: an area, a window and a full display. Adjust the area by moving, resizing, redrawing and nudging it, and by dragging the bar; switch the microphone; Cancel with the button, Esc and a right-click; Record with the button, Return and the shortcut. While recording, drag the bar, also over a screen that does not change: the movie pans smoothly. Stop from the bar, the menu and the shortcut; the MP4 plays with the pointer and clicks; system audio and the microphone when turned on.
 - [ ] Scrolling capture on a long web page, with manual scrolling and with Auto-Scroll; sticky headers appear once. Also upward in a chat that opens at its newest message. The capture-category log line `Scrolling capture done: …` counts each frame outcome.
 - [ ] Recognize Text on a paragraph and on a QR code; Pick Color with a contrast reference; Measure Screen.
 - [ ] Every editor tool: draw, select, move, resize, change style, undo and redo; text editing; crop with auto-trim; backdrop. Step counter: the pointer tip lands on the click and the badge beside it, inside the image near its edges.
