@@ -93,16 +93,7 @@ struct CaptureSettingsPane: View {
                 Toggle("Show the pointer", isOn: $settings.recordPointer)
                 Toggle("Highlight clicks", isOn: $settings.recordClicks)
                 Toggle("Record system audio", isOn: $settings.recordSystemAudio)
-                Toggle("Record the microphone", isOn: $settings.recordMicrophone)
-                    .onChange(of: settings.recordMicrophone) { _, enabled in
-                        guard enabled else { return }
-                        Task {
-                            if await !PermissionCenter.shared.requestMicrophone() {
-                                settings.recordMicrophone = false
-                            }
-                        }
-                    }
-                Text("Recordings are saved as MP4 next to your screenshots, copied to the clipboard and shown in Finder.")
+                Text("Record Screen with Microphone also records the microphone; the microphone button next to Record switches it for one recording. Recordings are saved as MP4 next to your screenshots, copied to the clipboard and shown in Finder.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }

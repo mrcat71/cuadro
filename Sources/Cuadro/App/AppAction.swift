@@ -16,6 +16,7 @@ enum AppAction: String, CaseIterable, Identifiable, Codable {
     case openFile
     case openClipboard
     case recordScreen
+    case recordScreenWithMicrophone
 
     var id: String { rawValue }
 
@@ -34,6 +35,7 @@ enum AppAction: String, CaseIterable, Identifiable, Codable {
         case .openFile: "Open Image…"
         case .openClipboard: "Open from Clipboard"
         case .recordScreen: "Record Screen"
+        case .recordScreenWithMicrophone: "Record Screen with Microphone"
         }
     }
 
@@ -52,6 +54,7 @@ enum AppAction: String, CaseIterable, Identifiable, Codable {
         case .openFile: "folder"
         case .openClipboard: "doc.on.clipboard"
         case .recordScreen: "record.circle"
+        case .recordScreenWithMicrophone: "mic.circle"
         }
     }
 

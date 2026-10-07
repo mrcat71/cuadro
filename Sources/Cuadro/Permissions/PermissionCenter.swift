@@ -102,15 +102,18 @@ final class PermissionCenter {
         _ = AXIsProcessTrustedWithOptions(options)
     }
 
-    /// Asks for the microphone, which only "Record the microphone" uses. True when allowed.
-    func requestMicrophone() async -> Bool {
+    /// Asks for the microphone, which only recordings with the microphone use. True when allowed.
+    /// Once refused, only System Settings can turn it on: `openingSettings` opens that pane.
+    func requestMicrophone(openingSettings: Bool) async -> Bool {
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized:
             return true
         case .notDetermined:
             return await AVCaptureDevice.requestAccess(for: .audio)
         default:
-            open("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
+            if openingSettings {
+                open("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
+            }
             return false
         }
     }

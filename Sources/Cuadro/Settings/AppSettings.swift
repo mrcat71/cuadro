@@ -93,7 +93,6 @@ final class AppSettings {
     var recordPointer: Bool { didSet { defaults.set(recordPointer, forKey: Keys.recordPointer) } }
     var recordClicks: Bool { didSet { defaults.set(recordClicks, forKey: Keys.recordClicks) } }
     var recordSystemAudio: Bool { didSet { defaults.set(recordSystemAudio, forKey: Keys.recordSystemAudio) } }
-    var recordMicrophone: Bool { didSet { defaults.set(recordMicrophone, forKey: Keys.recordMicrophone) } }
     /// Last onboarding version the user finished (0: never), see `PermissionCenter.onboardingVersion`.
     var completedOnboardingVersion: Int { didSet { defaults.set(completedOnboardingVersion, forKey: Keys.completedOnboardingVersion) } }
 
@@ -133,7 +132,6 @@ final class AppSettings {
         recordPointer = defaults.object(forKey: Keys.recordPointer) as? Bool ?? true
         recordClicks = defaults.object(forKey: Keys.recordClicks) as? Bool ?? true
         recordSystemAudio = defaults.object(forKey: Keys.recordSystemAudio) as? Bool ?? false
-        recordMicrophone = defaults.object(forKey: Keys.recordMicrophone) as? Bool ?? false
         completedOnboardingVersion = defaults.integer(forKey: Keys.completedOnboardingVersion)
         shortcuts = Self.loadShortcuts(from: defaults)
         toolStyles = Self.load([String: AnnotationStyle].self, from: defaults, key: Keys.toolStyles) ?? [:]
@@ -248,7 +246,6 @@ final class AppSettings {
         static let recordPointer = "recordPointer"
         static let recordClicks = "recordClicks"
         static let recordSystemAudio = "recordSystemAudio"
-        static let recordMicrophone = "recordMicrophone"
         static let completedOnboardingVersion = "completedOnboardingVersion"
         static let shortcuts = "shortcuts"
         static let toolStyles = "toolStyles"

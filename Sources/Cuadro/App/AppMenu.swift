@@ -35,7 +35,7 @@ enum AppMenu {
 
     private static func fileItems() -> [NSMenuItem] {
         var items: [NSMenuItem] = []
-        for action in [AppAction.captureArea, .captureWindow, .captureFullscreen, .captureScrolling, .recordScreen, .recognizeText] {
+        for action in [AppAction.captureArea, .captureWindow, .captureFullscreen, .captureScrolling, .recordScreen, .recordScreenWithMicrophone, .recognizeText] {
             let entry = item(action.title, #selector(AppDelegate.performAppAction(_:)))
             entry.representedObject = action.rawValue
             items.append(entry)

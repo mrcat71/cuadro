@@ -52,7 +52,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
         if let elapsed = CaptureCoordinator.shared.recordingElapsed {
-            let stop = NSMenuItem.action("Stop Recording (\(RecordingHUDView.format(elapsed)))") { CaptureCoordinator.shared.toggleRecording() }
+            let stop = NSMenuItem.action("Stop Recording (\(RecordingControlsView.format(elapsed)))") { CaptureCoordinator.shared.toggleRecording() }
             menu.addItem(stop.with(symbol: "stop.circle"))
             menu.addItem(.separator())
         }
@@ -68,6 +68,9 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         menu.addItem(delayedItem())
         menu.addItem(NSMenuItem.action("Pin Area to Screen") { CaptureCoordinator.shared.pinArea() }.with(symbol: "pin"))
         menu.addItem(item(for: .recordScreen))
+        if !CaptureCoordinator.shared.isRecording, !CaptureCoordinator.shared.isAdjustingRecording {
+            menu.addItem(item(for: .recordScreenWithMicrophone))
+        }
         menu.addItem(.separator())
         for action in [AppAction.recognizeText, .pickColor, .measure] {
             menu.addItem(item(for: action))
@@ -94,7 +97,12 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     }
 
     private func item(for action: AppAction) -> NSMenuItem {
-        let title = action == .recordScreen && CaptureCoordinator.shared.isRecording ? "Stop Recording" : action.title
+        var title = action.title
+        if action == .recordScreen, CaptureCoordinator.shared.isRecording {
+            title = "Stop Recording"
+        } else if action == .recordScreen, CaptureCoordinator.shared.isAdjustingRecording {
+            title = "Start Recording"
+        }
         let item = NSMenuItem.action(title) {
             CaptureCoordinator.shared.perform(action, copyOnly: NSEvent.modifierFlags.contains(.control))
         }

@@ -9,12 +9,17 @@ final class CaptureCoordinator {
     private var overlay: OverlayController?
     private var scrollSession: ScrollCaptureController?
     private var recorder: ScreenRecordingController?
+    /// Record Screen with Microphone started the selection on its way to `recorder`.
+    private var recordsMicrophone = false
     private var isStarting = false
     private let settings = AppSettings.shared
 
-    var isBusy: Bool { overlay != nil || scrollSession != nil || isStarting }
-    var isRecording: Bool { recorder != nil }
-    var recordingElapsed: TimeInterval? { recorder?.elapsed }
+    var isBusy: Bool { overlay != nil || scrollSession != nil || isStarting || recorder?.isAdjusting == true }
+    /// A recording runs (not while its frame is still being adjusted).
+    var isRecording: Bool { recorder?.isRecording == true }
+    /// The recording frame is shown for adjusting, before the recording starts.
+    var isAdjustingRecording: Bool { recorder?.isAdjusting == true }
+    var recordingElapsed: TimeInterval? { isRecording ? recorder?.elapsed : nil }
 
     /// - Parameter copyOnly: Control was held (a Control variant of the shortcut, or a menu
     ///   click): the screenshot only goes to the clipboard, nothing opens.
@@ -32,17 +37,33 @@ final class CaptureCoordinator {
         case .measure: beginOverlay(mode: .ruler, intent: .capture)
         case .openFile: DocumentOpener.openFile()
         case .openClipboard: DocumentOpener.openClipboard()
-        case .recordScreen: toggleRecording()
+        case .recordScreen: toggleRecording(microphone: false)
+        case .recordScreenWithMicrophone: toggleRecording(microphone: true)
         }
     }
 
-    /// Starts picking the area to record, or stops the recording in progress.
-    func toggleRecording() {
+    /// Starts picking the area to record; with a recording under way, starts it once its frame
+    /// is adjusted or stops it.
+    func toggleRecording(microphone: Bool = false) {
         if let recorder {
-            recorder.stop()
+            recorder.primaryAction()
             return
         }
-        beginOverlay(mode: .area, intent: .record)
+        guard !isBusy, ensurePermission() else { return }
+        guard microphone else {
+            recordsMicrophone = false
+            beginOverlay(mode: .area, intent: .record)
+            return
+        }
+        // Ask before the overlay, which would cover the system prompt.
+        isStarting = true
+        Task {
+            let allowed = await ScreenRecordingController.allowMicrophone(openingSettings: true)
+            isStarting = false
+            guard allowed else { return }
+            recordsMicrophone = true
+            beginOverlay(mode: .area, intent: .record)
+        }
     }
 
     func pinArea() {
@@ -172,8 +193,7 @@ final class CaptureCoordinator {
         case .cancelled, .finished:
             restoreFocus(frontmost)
         case .display(let snapshot) where intent == .record:
-            restoreFocus(frontmost)
-            startRecording(display: snapshot, region: CGRect(origin: .zero, size: snapshot.frame.size))
+            beginRecording(display: snapshot, region: CGRect(origin: .zero, size: snapshot.frame.size), frontmost: frontmost)
         case .display(let snapshot):
             deliver(CaptureResult(image: snapshot.image, scale: snapshot.scale, kind: .fullscreen, screenRect: snapshot.frame, appName: frontmost?.localizedName), frontmost: frontmost, copyOnly: copyOnly)
         case .window(let window):
@@ -198,8 +218,7 @@ final class CaptureCoordinator {
                 restoreFocus(frontmost)
                 startScrolling(display: snapshot, region: rect)
             case .record:
-                restoreFocus(frontmost)
-                startRecording(display: snapshot, region: rect)
+                beginRecording(display: snapshot, region: rect, frontmost: frontmost)
             }
         }
     }
@@ -215,44 +234,19 @@ final class CaptureCoordinator {
         session.start()
     }
 
-    /// Records `region` (display-local y-down points) of a display, without Cuadro's own windows.
-    private func startRecording(display: DisplaySnapshot, region: CGRect) {
+    /// Shows `region` (display-local y-down points) of a display with the recording controls, to
+    /// adjust before recording. Focus goes back to `frontmost` once the recording starts.
+    private func beginRecording(display: DisplaySnapshot, region: CGRect, frontmost: NSRunningApplication?) {
         guard recorder == nil else { return }
-        isStarting = true
-        Task { [weak self] in
-            guard let self else { return }
-            defer { isStarting = false }
-            do {
-                let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-                guard let scDisplay = content.displays.first(where: { $0.displayID == display.displayID }) else {
-                    throw CaptureError.noDisplays
-                }
-                let ownPID = ProcessInfo.processInfo.processIdentifier
-                let filter = SCContentFilter(display: scDisplay, excludingApplications: content.applications.filter { $0.processID == ownPID }, exceptingWindows: [])
-                let directory = ImageExporter.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
-                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-                let session = RecordingSession(
-                    filter: filter,
-                    configuration: .recording(region: region, scale: display.scale),
-                    outputURL: directory.appendingPathComponent("Recording.mp4")
-                )
-                let controller = ScreenRecordingController(session: session, area: display.globalRect(fromLocal: region), screenFrame: display.frame) { [weak self] in
-                    self?.recorder = nil
-                    NotificationCenter.default.post(name: .recordingChanged, object: nil)
-                }
-                recorder = controller
-                NotificationCenter.default.post(name: .recordingChanged, object: nil)
-                do {
-                    try await controller.start()
-                } catch {
-                    recorder = nil
-                    NotificationCenter.default.post(name: .recordingChanged, object: nil)
-                    throw error
-                }
-            } catch {
-                ToastCenter.shared.showError("Could not start recording", error)
-            }
+        let controller = ScreenRecordingController(
+            display: RecordingDisplay(display), area: region, microphone: recordsMicrophone,
+            returnFocus: { [weak self] in self?.restoreFocus(frontmost) }
+        ) { [weak self] in
+            self?.recorder = nil
+            NotificationCenter.default.post(name: .recordingChanged, object: nil)
         }
+        recorder = controller
+        controller.begin()
     }
 
     func recognizeText(in image: CGImage) {

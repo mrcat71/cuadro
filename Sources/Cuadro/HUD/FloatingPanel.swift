@@ -43,4 +43,6 @@ class FloatingPanel: NSPanel {
 extension NSWindow.Level {
     /// Above the capture overlay (which uses `.screenSaver`).
     static let aboveOverlay = NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue + 1)
+    /// The recording controls, above the dimmed screen of the adjust stage (`.statusBar`).
+    static let recordingControls = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 1)
 }

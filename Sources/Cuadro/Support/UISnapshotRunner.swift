@@ -32,6 +32,10 @@ enum UISnapshotRunner {
         SettingsWindowController.shared.show()
         OnboardingWindowController.shared.show()
         ThumbnailOverlay.shared.show(CaptureResult(image: sample, scale: 2, kind: .area))
+        let recordingChrome = showRecordingChrome()
+        defer {
+            for controller in recordingChrome { controller.debugDismiss() }
+        }
         try await Task.sleep(for: .seconds(2))
         if let editor = (NSApp.windows.compactMap { $0.windowController as? EditorWindowController }.first) {
             // 100% whenever the screen fits the 800 × 500 pt sample; less means the initial fit broke.
@@ -76,34 +80,72 @@ enum UISnapshotRunner {
         try await recordEditorWindow(windows, into: directory)
     }
 
-    /// Records about two seconds of the editor window through the RecordingSession that Record
-    /// Screen uses, switching tools meanwhile so frames keep coming, and reads the movie back.
+    /// The recording frame being adjusted on the main screen, and the controls of a recording in
+    /// progress around a second area. Nothing is recorded.
+    private static func showRecordingChrome() -> [ScreenRecordingController] {
+        guard let screen = NSScreen.main, let displayID = screen.displayID else { return [] }
+        let display = RecordingDisplay(displayID: displayID, frame: screen.frame, scale: screen.backingScaleFactor)
+        let adjusting = ScreenRecordingController(display: display, area: CGRect(x: 120, y: 160, width: 640, height: 360), microphone: true, returnFocus: {}) {}
+        adjusting.begin()
+        let recording = ScreenRecordingController(display: display, area: CGRect(x: 840, y: 160, width: 480, height: 300), microphone: true, returnFocus: {}) {}
+        recording.debugShowRecordingControls()
+        return [adjusting, recording]
+    }
+
+    /// Records about two seconds through the RecordingSession that Record Screen uses: whole
+    /// display frames showing only the editor window, cropped to part of it that pans across it
+    /// the way dragging the recording controls does, with system audio, while switching tools so
+    /// frames keep coming. Reads the movie back and saves its first and last frames.
     private static func recordEditorWindow(_ windows: [SCWindow], into directory: URL) async throws {
         guard let window = windows.first(where: { $0.title == "UI Snapshot" }),
               let model = (NSApp.windows.compactMap { $0.windowController as? EditorWindowController }.first?.model)
         else { return }
-        let filter = SCContentFilter(desktopIndependentWindow: window)
+        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        guard let display = content.displays.first(where: { $0.frame.intersects(window.frame) }) else { return }
+        // Nothing but the editor window, so nothing else on the screen ends up in the movie.
+        let filter = SCContentFilter(display: display, including: [window])
         let scale = CGFloat(filter.pointPixelScale)
-        let configuration = SCStreamConfiguration()
-        configuration.width = Int(filter.contentRect.width * scale) & ~1
-        configuration.height = Int(filter.contentRect.height * scale) & ~1
-        configuration.pixelFormat = kCVPixelFormatType_32BGRA
-        configuration.minimumFrameInterval = CMTime(value: 1, timescale: 30)
+        let frame = CGSize(width: CGFloat(display.width) * scale, height: CGFloat(display.height) * scale)
+        // Both frames are global, y down.
+        let editor = window.frame.offsetBy(dx: -display.frame.minX, dy: -display.frame.minY).intersection(CGRect(x: 0, y: 0, width: CGFloat(display.width), height: CGFloat(display.height)))
+        let crop = CGSize(width: CGFloat(Int(editor.width * scale * 0.6) & ~1), height: CGFloat(Int(editor.height * scale * 0.6) & ~1))
+        let first = CGPoint(x: (editor.minX * scale).rounded(), y: (editor.minY * scale).rounded())
+        let last = CGPoint(x: (editor.maxX * scale).rounded() - crop.width, y: (editor.maxY * scale).rounded() - crop.height)
         let url = directory.appendingPathComponent("recording.mp4")
         if FileManager.default.fileExists(atPath: url.path) {
             try FileManager.default.removeItem(at: url)
         }
-        let session = RecordingSession(filter: filter, configuration: configuration, outputURL: url)
+        let options = RecordingOptions(showsPointer: false, highlightsClicks: false, systemAudio: true)
+        let session = try RecordingSession(filter: filter, frameSize: frame, crop: CGRect(origin: first, size: crop), options: options, outputURL: url)
         try await session.start()
-        for tool in [EditorTool.ellipse, .text, .arrow, .rectangle] {
+        for (step, tool) in [EditorTool.ellipse, .text, .arrow, .rectangle].enumerated() {
             try await Task.sleep(for: .milliseconds(500))
             model.tool = tool
+            let progress = CGFloat(step + 1) / 4
+            session.move(cropOrigin: CGPoint(x: first.x + (last.x - first.x) * progress, y: first.y + (last.y - first.y) * progress))
         }
+        // Lets the last pan settle.
+        try await Task.sleep(for: .milliseconds(400))
         try await session.stop()
         let asset = AVURLAsset(url: url)
         let duration = try await asset.load(.duration).seconds
-        let tracks = try await asset.loadTracks(withMediaType: .video)
-        print("wrote \(url.path) (recording, \(String(format: "%.1f", duration)) s, \(tracks.count) video track)")
+        let video = try await asset.loadTracks(withMediaType: .video)
+        let audio = try await asset.loadTracks(withMediaType: .audio)
+        let size = try await video.first?.load(.naturalSize) ?? .zero
+        let audioSeconds = try await audio.first?.load(.timeRange).duration.seconds ?? 0
+        let frames = session.frameCounts
+        print("wrote \(url.path) (recording, \(String(format: "%.1f", duration)) s, \(Int(size.width))x\(Int(size.height)) px from \(Int(frame.width))x\(Int(frame.height)) frames, \(frames.written) frames, \(frames.dropped) dropped, \(video.count) video and \(audio.count) audio tracks, audio \(String(format: "%.1f", audioSeconds)) s)")
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.requestedTimeToleranceBefore = .zero
+        generator.requestedTimeToleranceAfter = .zero
+        for (name, seconds) in [("recording-first", 0.0), ("recording-last", max(0, duration - 0.05))] {
+            let image = try await generator.image(at: CMTime(seconds: seconds, preferredTimescale: 600)).image
+            if let data = ImageExporter.encodePNG(image, scale: scale) {
+                let frameURL = directory.appendingPathComponent("\(name).png")
+                try data.write(to: frameURL)
+                print("wrote \(frameURL.path) (movie frame at \(String(format: "%.2f", seconds)) s)")
+            }
+        }
     }
 
     /// Renders a window's content layer tree into an image.
