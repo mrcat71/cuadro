@@ -208,7 +208,8 @@ nonisolated final class RecordingWriter: NSObject, SCStreamOutput, SCStreamDeleg
     }
 
     /// AAC in the microphone's own rate and channel count (ScreenCaptureKit delivers the device's
-    /// native format), within what AAC takes: up to 48 kHz and two channels.
+    /// native format), within what AAC takes: up to 48 kHz, two channels and, at the 8 to 24 kHz
+    /// of a Bluetooth headset, less than the usual bit rate.
     private static func microphoneSettings() -> [String: Any] {
         var sampleRate = 48_000.0
         var channels = 1
@@ -216,12 +217,10 @@ nonisolated final class RecordingWriter: NSObject, SCStreamOutput, SCStreamDeleg
             if format.mSampleRate >= 8_000 { sampleRate = min(format.mSampleRate, 48_000) }
             channels = min(max(Int(format.mChannelsPerFrame), 1), 2)
         }
-        return [
-            AVFormatIDKey: kAudioFormatMPEG4AAC,
-            AVSampleRateKey: sampleRate,
-            AVNumberOfChannelsKey: channels,
-            AVEncoderBitRateKey: channels == 1 ? 96_000 : 128_000,
-        ]
+        let settings = AACEncoding.settings(sampleRate: sampleRate, channels: channels, preferredBitRate: channels == 1 ? 96_000 : 128_000)
+        let bitRate = (settings[AVEncoderBitRateKey] as? Int).map { "\($0 / 1000) kbps" } ?? "the encoder's default bit rate"
+        Log.capture.notice("Microphone track: \(Int(sampleRate)) Hz, \(channels) ch, AAC at \(bitRate, privacy: .public)")
+        return settings
     }
 
     var frameCounts: (written: Int, dropped: Int) { counts.withLock { $0 } }

@@ -13,7 +13,7 @@ let package = Package(
         .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.10.0"),
     ],
     targets: [
-        // Pure logic and rendering: geometry, annotations, stitching, colors, file naming.
+        // Pure logic and rendering: geometry, annotations, stitching, colors, file naming, AAC settings.
         // No AppKit, so everything here is unit-testable without a window server.
         .target(name: "CuadroKit"),
         // The menu bar app: AppKit lifecycle, SwiftUI views, ScreenCaptureKit, Vision, Sparkle.
