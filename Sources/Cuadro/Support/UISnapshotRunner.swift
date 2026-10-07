@@ -6,6 +6,11 @@ import CuadroKit
 /// Development aid: `Cuadro --ui-snapshot <dir>` opens the main windows with a synthetic
 /// screenshot, captures Cuadro's own windows with ScreenCaptureKit and quits.
 /// Requires the Screen Recording permission.
+struct SnapshotCheckFailure: LocalizedError {
+    let description: String
+    var errorDescription: String? { description }
+}
+
 enum UISnapshotRunner {
     static func run(outputDirectory: URL) {
         Task {
@@ -36,6 +41,7 @@ enum UISnapshotRunner {
         defer {
             for controller in recordingChrome { controller.debugDismiss() }
         }
+        try checkRecordingControlsLevel()
         try await Task.sleep(for: .seconds(2))
         if let editor = (NSApp.windows.compactMap { $0.windowController as? EditorWindowController }.first) {
             // 100% whenever the screen fits the 800 × 500 pt sample; less means the initial fit broke.
@@ -90,6 +96,15 @@ enum UISnapshotRunner {
         let recording = ScreenRecordingController(display: display, area: CGRect(x: 840, y: 160, width: 480, height: 300), microphone: true, returnFocus: {}) {}
         recording.debugShowRecordingControls()
         return [adjusting, recording]
+    }
+
+    /// The recording controls must stay above the dimmed screen of the adjust stage, or it takes
+    /// their clicks. That happened once, when every FloatingPanel fell back to `.floating`.
+    private static func checkRecordingControlsLevel() throws {
+        guard let shield = NSApp.windows.first(where: { $0 is RecordingShieldWindow }) else { return }
+        for controls in NSApp.windows where controls is RecordingControlsPanel && controls.level <= shield.level {
+            throw SnapshotCheckFailure(description: "recording controls at window level \(controls.level.rawValue), not above the dimmed screen at \(shield.level.rawValue)")
+        }
     }
 
     /// Records about two seconds through the RecordingSession that Record Screen uses: whole
