@@ -121,6 +121,53 @@ struct RecordingAreaTests {
         #expect(RecordingArea.cropOrigin(of: CGRect(x: 950, y: 0, width: 400, height: 300), scale: 2, cropSize: crop, frameSize: frame) == CGPoint(x: 1200, y: 0))
     }
 
+    struct CropCase: Sendable, CustomTestStringConvertible {
+        let name: String
+        let area: CGRect
+        let scale: CGFloat
+        let frameSize: CGSize
+        let expected: CGRect
+        var testDescription: String { name }
+    }
+
+    /// The movie is 800 × 600 pixels, made on a Retina display.
+    @Test(arguments: [
+        CropCase(name: "the movie's own display", area: CGRect(x: 100, y: 100, width: 400, height: 300), scale: 2, frameSize: CGSize(width: 2000, height: 1200), expected: CGRect(x: 200, y: 200, width: 800, height: 600)),
+        CropCase(name: "a display with half the pixels", area: CGRect(x: 100, y: 100, width: 400, height: 300), scale: 1, frameSize: CGSize(width: 1000, height: 600), expected: CGRect(x: 100, y: 100, width: 400, height: 300)),
+        CropCase(name: "kept inside the frame", area: CGRect(x: 700, y: 400, width: 400, height: 300), scale: 1, frameSize: CGSize(width: 1000, height: 600), expected: CGRect(x: 600, y: 300, width: 400, height: 300)),
+    ])
+    func crop(_ testCase: CropCase) {
+        let crop = RecordingArea.crop(of: testCase.area, scale: testCase.scale, movieSize: CGSize(width: 800, height: 600), movieScale: 2, frameSize: testCase.frameSize)
+        #expect(crop == testCase.expected)
+    }
+
+    struct DisplayCase: Sendable, CustomTestStringConvertible {
+        let name: String
+        let area: CGRect
+        let current: Int
+        let expected: Int
+        var testDescription: String { name }
+    }
+
+    /// Two 1000 × 600 displays side by side and a larger one below the second, Cocoa y up.
+    private static let displays = [
+        CGRect(x: 0, y: 0, width: 1000, height: 600),
+        CGRect(x: 1000, y: 0, width: 1000, height: 600),
+        CGRect(x: 1000, y: -900, width: 1200, height: 900),
+    ]
+
+    @Test(arguments: [
+        DisplayCase(name: "stays while its center is home", area: CGRect(x: 700, y: 100, width: 400, height: 300), current: 0, expected: 0),
+        DisplayCase(name: "moves once its center crosses", area: CGRect(x: 850, y: 100, width: 400, height: 300), current: 0, expected: 1),
+        DisplayCase(name: "the shared edge belongs to the next display", area: CGRect(x: 800, y: 100, width: 400, height: 300), current: 0, expected: 1),
+        DisplayCase(name: "moves down onto the display below", area: CGRect(x: 1100, y: -200, width: 400, height: 300), current: 1, expected: 2),
+        DisplayCase(name: "stays while its center is on no display", area: CGRect(x: 300, y: -400, width: 400, height: 300), current: 0, expected: 0),
+        DisplayCase(name: "stays when it does not fit", area: CGRect(x: 1000, y: 100, width: 1100, height: 300), current: 2, expected: 2),
+    ])
+    func displayIndex(_ testCase: DisplayCase) {
+        #expect(RecordingArea.displayIndex(for: testCase.area, among: Self.displays, current: testCase.current) == testCase.expected)
+    }
+
     struct SmoothingCase: Sendable, CustomTestStringConvertible {
         let name: String
         let current: CGPoint

@@ -84,6 +84,25 @@ public enum RecordingArea {
         )
     }
 
+    /// The crop for `area` in the frame pixels of a display with `scale` pixels per point: the
+    /// movie's `movieSize`, made at `movieScale`, in this display's pixels. The movie scales it
+    /// back, so a display with other pixels per point keeps the movie's size and aspect ratio.
+    public static func crop(of area: CGRect, scale: CGFloat, movieSize: CGSize, movieScale: CGFloat, frameSize: CGSize) -> CGRect {
+        let ratio = movieScale > 0 ? scale / movieScale : 1
+        let size = CGSize(width: (movieSize.width * ratio).rounded(), height: (movieSize.height * ratio).rounded())
+        return CGRect(origin: cropOrigin(of: area, scale: scale, cropSize: size, frameSize: frameSize), size: size)
+    }
+
+    /// The display a dragged area belongs on, among display frames in one global space: the one
+    /// holding the area's center if the area fits on it, else `current`, which keeps the area.
+    public static func displayIndex(for area: CGRect, among displays: [CGRect], current: Int) -> Int {
+        let center = CGPoint(x: area.midX, y: area.midY)
+        guard let index = displays.firstIndex(where: { $0.contains(center) }),
+              area.width <= displays[index].width, area.height <= displays[index].height
+        else { return current }
+        return index
+    }
+
     private static func snapped(_ point: CGPoint, scale: CGFloat) -> CGPoint {
         guard scale > 0 else { return point }
         return CGPoint(x: (point.x * scale).rounded() / scale, y: (point.y * scale).rounded() / scale)
