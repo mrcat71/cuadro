@@ -131,7 +131,7 @@ enum UISnapshotRunner {
             try FileManager.default.removeItem(at: url)
         }
         let options = RecordingOptions(showsPointer: false, highlightsClicks: false, systemAudio: true)
-        let session = try RecordingSession(filter: filter, frameSize: frame, crop: CGRect(origin: first, size: crop), options: options, outputURL: url)
+        let session = try RecordingSession(source: RecordingSource(displayID: display.displayID, filter: filter, frameSize: frame), crop: CGRect(origin: first, size: crop), options: options, outputURL: url)
         try await session.start()
         for (step, tool) in [EditorTool.ellipse, .text, .arrow, .rectangle].enumerated() {
             try await Task.sleep(for: .milliseconds(500))

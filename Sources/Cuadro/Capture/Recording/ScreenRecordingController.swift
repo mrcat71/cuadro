@@ -34,23 +34,32 @@ struct RecordingDisplay {
 }
 
 /// One Record Screen: the frame shown for adjusting, the recording, during which dragging the
-/// controls moves the frame and pans the movie, and the movie saved to the screenshots folder.
+/// controls moves the frame and pans the movie, also onto another display, and the movie saved
+/// to the screenshots folder.
 final class ScreenRecordingController {
-    private let display: RecordingDisplay
+    /// The display the frame is on.
+    private var display: RecordingDisplay
+    /// Every display the frame can move to, the one it started on first.
+    private let displays: [RecordingDisplay]
     /// Display-local y-down points, on the pixel grid.
     private(set) var area: CGRect
     private let returnFocus: () -> Void
     private let completion: () -> Void
     private let model = RecordingControlsModel()
     private var session: RecordingSession?
-    private var cropSize = CGSize.zero
+    /// The movie's pixels, and the pixels per point of the display it started on.
+    private var movieSize = CGSize.zero
+    private var movieScale: CGFloat = 1
+    /// What ScreenCaptureKit can record, from the start of the recording: the displays and
+    /// Cuadro's own app, which every stream leaves out.
+    private var shareable: (displays: [SCDisplay], excluded: [SCRunningApplication])?
     private var shield: RecordingShieldWindow?
     private var shieldView: RecordingShieldView?
     private var borderPanel: FloatingPanel?
     private var controlsPanel: RecordingControlsPanel?
     private var timer: Timer?
     private var startDate = Date()
-    /// Pointer (Cocoa global), area and controls origin when a drag of the controls began.
+    /// Pointer, area and controls origin, all Cocoa global, when a drag of the controls began.
     private var controlsDrag: (pointer: CGPoint, area: CGRect, controls: CGPoint)?
     private var isFinished = false
 
@@ -66,6 +75,10 @@ final class ScreenRecordingController {
     ///   - completion: the controller is done: cancelled, failed or saved.
     init(display: RecordingDisplay, area: CGRect, microphone: Bool, returnFocus: @escaping () -> Void, completion: @escaping () -> Void) {
         self.display = display
+        displays = [display] + NSScreen.screens.compactMap { screen in
+            guard let id = screen.displayID, id != display.displayID else { return nil }
+            return RecordingDisplay(displayID: id, frame: screen.frame, scale: screen.backingScaleFactor)
+        }
         self.area = RecordingArea.moved(area, by: .zero, within: display.bounds, scale: display.scale)
         self.returnFocus = returnFocus
         self.completion = completion
@@ -76,6 +89,14 @@ final class ScreenRecordingController {
     /// Shows the frame for adjusting. Record, Return or the Record Screen shortcut start the
     /// recording; Cancel, Esc or a right-click drop it.
     func begin() {
+        showShield()
+        showControls()
+    }
+
+    /// Dims the frame's display and takes the pointer and the keyboard there, in place of the
+    /// shield of a display the frame left.
+    private func showShield() {
+        retire([shield])
         let shield = RecordingShieldWindow(frame: display.frame)
         let screen = NSScreen.screen(for: display.displayID)
         let hintTop = max(screen?.safeAreaInsets.top ?? 0, NSStatusBar.system.thickness) + 12
@@ -90,7 +111,6 @@ final class ScreenRecordingController {
         shield.makeFirstResponder(view)
         self.shield = shield
         shieldView = view
-        showControls()
     }
 
     /// The Record Screen shortcut and menu item: start the adjusted recording or stop the running one.
@@ -205,23 +225,32 @@ final class ScreenRecordingController {
     /// A stream of the whole display without Cuadro's own windows, cropped to the area.
     private func makeSession(options: RecordingOptions) async throws -> RecordingSession {
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-        guard let scDisplay = content.displays.first(where: { $0.displayID == display.displayID }) else {
-            throw CaptureError.noDisplays
-        }
         let ownPID = ProcessInfo.processInfo.processIdentifier
-        let filter = SCContentFilter(display: scDisplay, excludingApplications: content.applications.filter { $0.processID == ownPID }, exceptingWindows: [])
+        shareable = (content.displays, content.applications.filter { $0.processID == ownPID })
+        guard let source = source(for: display) else { throw CaptureError.noDisplays }
         let pixels = RecordingArea.pixelSize(of: area, scale: display.scale)
-        cropSize = CGSize(width: pixels.width, height: pixels.height)
-        let origin = RecordingArea.cropOrigin(of: area, scale: display.scale, cropSize: cropSize, frameSize: display.pixelSize)
+        movieSize = CGSize(width: pixels.width, height: pixels.height)
+        movieScale = display.scale
         let directory = ImageExporter.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         return try RecordingSession(
-            filter: filter,
-            frameSize: display.pixelSize,
-            crop: CGRect(origin: origin, size: cropSize),
+            source: source,
+            crop: crop(of: area, on: display),
             options: options,
             outputURL: directory.appendingPathComponent("Recording.mp4")
         )
+    }
+
+    /// The stream source for `display`: all of it but Cuadro's own windows.
+    private func source(for display: RecordingDisplay) -> RecordingSource? {
+        guard let shareable, let screen = shareable.displays.first(where: { $0.displayID == display.displayID }) else { return nil }
+        let filter = SCContentFilter(display: screen, excludingApplications: shareable.excluded, exceptingWindows: [])
+        return RecordingSource(displayID: display.displayID, filter: filter, frameSize: display.pixelSize)
+    }
+
+    /// The crop for `area` in the frame pixels of `display`.
+    private func crop(of area: CGRect, on display: RecordingDisplay) -> CGRect {
+        RecordingArea.crop(of: area, scale: display.scale, movieSize: movieSize, movieScale: movieScale, frameSize: display.pixelSize)
     }
 
     /// Saves what was recorded, also after `failure` stopped the recording early.
@@ -281,29 +310,54 @@ final class ScreenRecordingController {
         let pointer = NSEvent.mouseLocation
         switch event {
         case .began:
-            controlsDrag = (pointer, area, panel.frame.origin)
+            controlsDrag = (pointer, display.globalRect(area), panel.frame.origin)
         case .moved:
             guard let drag = controlsDrag else { return }
-            let delta = CGPoint(x: pointer.x - drag.pointer.x, y: drag.pointer.y - pointer.y)
-            let moved = RecordingArea.moved(drag.area, by: delta, within: display.bounds, scale: display.scale)
+            // Cocoa global points: once its center is over another display, the area moves there.
+            let wanted = drag.area.offsetBy(dx: pointer.x - drag.pointer.x, dy: pointer.y - drag.pointer.y)
+            let candidates = movableDisplays
+            let current = candidates.firstIndex { $0.displayID == display.displayID } ?? 0
+            let target = candidates[RecordingArea.displayIndex(for: wanted, among: candidates.map(\.frame), current: current)]
+            let local = ScreenCoordinates.localTopLeft(fromCocoa: wanted, screenFrame: target.frame)
+            let moved = RecordingArea.moved(local, by: .zero, within: target.bounds, scale: target.scale)
+            move(to: moved, on: target)
             // The controls follow the area, stopping with it at the display's edges.
-            let origin = CGPoint(x: drag.controls.x + moved.minX - drag.area.minX, y: drag.controls.y - (moved.minY - drag.area.minY))
-            panel.setFrameOrigin(onScreen(origin, size: panel.frame.size))
-            move(to: moved)
+            let shift = target.globalRect(moved).origin - drag.area.origin
+            panel.setFrameOrigin(onScreen(drag.controls + shift, size: panel.frame.size))
         case .ended:
             controlsDrag = nil
         }
     }
 
-    private func move(to newArea: CGRect) {
-        guard newArea != area else { return }
+    /// The displays the area can move to now: while recording, those ScreenCaptureKit records.
+    private var movableDisplays: [RecordingDisplay] {
+        guard phase == .recording, let shareable else { return displays }
+        return displays.filter { candidate in
+            candidate.displayID == display.displayID || shareable.displays.contains { $0.displayID == candidate.displayID }
+        }
+    }
+
+    private func move(to newArea: CGRect, on target: RecordingDisplay) {
+        let changesDisplay = target.displayID != display.displayID
+        guard newArea != area || changesDisplay else { return }
         area = newArea
+        display = target
         switch phase {
         case .adjusting, .starting:
-            shieldView?.area = newArea
+            if changesDisplay {
+                showShield()
+            } else {
+                shieldView?.area = newArea
+            }
         case .recording:
             borderPanel?.setFrameOrigin(display.globalRect(newArea).insetBy(dx: -4, dy: -4).origin)
-            session?.move(cropOrigin: RecordingArea.cropOrigin(of: newArea, scale: display.scale, cropSize: cropSize, frameSize: display.pixelSize))
+            let crop = crop(of: newArea, on: display)
+            if !changesDisplay {
+                session?.move(cropOrigin: crop.origin)
+            } else if let source = source(for: display) {
+                session?.move(to: source, crop: crop)
+                Log.capture.notice("Recording moved to display \(self.display.displayID)")
+            }
         case .stopping:
             break
         }
