@@ -17,7 +17,7 @@ Free, native screenshot tool for macOS 26 and later, with Shottr's feature set a
 
 - macOS 26 or later.
 - Xcode with Swift 6.2 or later (developed with Xcode 27 and Swift 6.4).
-- An "Apple Development" signing identity is recommended (see [Signing](#signing)).
+- A stable signing identity is recommended: `make signing-identity` makes one (see [Signing](#signing)).
 - For `make dist`: [dmgbuild](https://github.com/dmgbuild/dmgbuild), `pipx install dmgbuild` (CI's pinned versions are in `.github/dmg-requirements.txt`).
 
 ## Build and run
@@ -29,6 +29,7 @@ make install    # copy to ~/Applications/Cuadro.app
 make test       # unit tests (Swift Testing)
 make dist       # zip, dmg and SHA256SUMS of build/Cuadro.app in build/dist
 make appcast    # sign the zip and write build/dist/appcast.xml, the update feed
+make signing-identity  # once: the self-signed identity releases and local builds sign with
 make clean      # remove .build and build
 ```
 
@@ -36,11 +37,15 @@ Install to `~/Applications` before turning on **Launch at login**: the login ite
 
 ### Signing
 
-`make app` signs with the first "Apple Development" identity in your keychain, so the code signature stays stable across rebuilds and updates, and Screen Recording and Accessibility stay allowed. Without one it falls back to ad-hoc signing: to macOS every build, and every update, is a new app, so it asks for both permissions again. Override with `make app SIGN_IDENTITY=-` (ad-hoc) or any identity hash from `security find-identity -v -p codesigning`.
+macOS keeps Screen Recording, Microphone and Accessibility allowed only for the same code signature. An ad-hoc signature changes with every build, so to macOS every build, and every update, is a new app that asks for all of them again. A certificate keeps the signature the same: the designated requirement becomes `identifier "io.github.mrcat71.cuadro" and certificate leaf = H"…"` instead of a build's `cdhash`.
 
-A free Apple ID is enough for an Apple Development identity: Xcode > Settings > Accounts, add the Apple ID, then Manage Certificates > + > Apple Development.
+`make signing-identity` makes that certificate once, with no Apple account: a self-signed "Cuadro Code Signing" identity valid for 20 years. It stores it in the `MACOS_CERTIFICATE_P12` and `MACOS_CERTIFICATE_PASSWORD` repository secrets (needs `gh auth login`), so releases are signed with it, and imports it into the login keychain, so local builds sign the same way and share the permissions. The first local build may ask to let `codesign` use the key: choose Always Allow. The private key exists only in that keychain and the secret: back it up from Keychain Access, since a new identity means one more round of permissions on every Mac. The target refuses to replace an existing identity, in the keychain or in the secrets, so run it once, on one Mac.
 
-Every build carries `com.apple.security.device.audio-input` (`Resources/Cuadro.entitlements`): without it the hardened runtime refuses the microphone, and macOS never even asks. Ad-hoc builds sign with `Resources/AdHoc.entitlements` instead, which adds `com.apple.security.cs.disable-library-validation`: an ad-hoc signature has no team ID, so the hardened runtime would refuse to load the embedded Sparkle.framework. Builds signed with a real identity do not get that one.
+Releases need nothing on the Macs that install them: each copy carries the same signature, and every Mac keeps its permissions across updates. To build locally on another Mac with the same signature, export the identity from Keychain Access on the first one (`.p12` with a password) and open the file on the other.
+
+`make app` signs with "Cuadro Code Signing" if the keychain has it, else with the first "Apple Development" identity (a free Apple ID can make one in Xcode > Settings > Accounts > Manage Certificates), else ad-hoc. Override with `make app SIGN_IDENTITY=-` (ad-hoc) or any identity hash from `security find-identity -p codesigning`.
+
+Every build carries `com.apple.security.device.audio-input` (`Resources/Cuadro.entitlements`): without it the hardened runtime refuses the microphone, and macOS never even asks. A signature without a team ID, ad-hoc or self-signed, gets `Resources/AdHoc.entitlements` instead, which adds `com.apple.security.cs.disable-library-validation`: the hardened runtime would refuse to load the embedded Sparkle.framework. `make app` tells them apart by the framework's signature; builds signed with an Apple identity do not get that one.
 
 ## Permissions
 
@@ -58,7 +63,7 @@ The first launch opens a welcome window that shows both permissions with their l
 
 macOS applies a Screen Recording grant only to a new process: after switching it on, choose **Quit & Reopen** in System Settings or click **Relaunch Cuadro**.
 
-After an update of an ad-hoc signed copy, System Settings still shows Cuadro switched on, but the entry belongs to the old signature and macOS ignores it for the new copy. **Allow…** handles this: its first press per launch clears Cuadro's own entry (`tccutil reset ScreenCapture io.github.mrcat71.cuadro`, likewise `Accessibility`) and asks afresh, so switching Cuadro on again is enough. A stable signature (see [Signing](#signing)) avoids the round trip.
+After an update of an ad-hoc signed copy, and once more after the update that brings a certificate, System Settings still shows Cuadro switched on, but the entry belongs to the old signature and macOS ignores it for the new copy. **Allow…** handles this: its first press per launch clears Cuadro's own entry (`tccutil reset ScreenCapture io.github.mrcat71.cuadro`, likewise `Accessibility`) and asks afresh, so switching Cuadro on again is enough. A stable signature (see [Signing](#signing)) avoids the round trip.
 
 ## Updates
 
@@ -132,28 +137,30 @@ Inside the app:
 
 ## Releases
 
-Pushing a version tag runs [`release.yml`](.github/workflows/release.yml): tests, release build, smoke test, then a GitHub Release titled with the tag (`v0.1.1`) with `cuadro-<version>-macos-arm64.zip` (also the update archive), a `.dmg` that opens on the app and an Applications link, `SHA256SUMS` and the signed `appcast.xml`. Its notes are generated from the commits and also show in the update window. Bump `VERSION` in the `Makefile` and `CFBundleShortVersionString` in `Resources/Info.plist` for each release.
+To release, bump `CFBundleShortVersionString` in `Resources/Info.plist` (the `Makefile` reads its `VERSION` from there) and push the commit to `main`. [`release.yml`](.github/workflows/release.yml) sees a version that has no tag yet and runs tests, release build and smoke test, then publishes a GitHub Release titled `v<version>`, which also creates that tag, with `cuadro-<version>-macos-arm64.zip` (also the update archive), a `.dmg` that opens on the app and an Applications link, `SHA256SUMS` and the signed `appcast.xml`. Its notes are generated from the commits and also show in the update window. Installed copies pick it up with their next update check. A push that changes `Info.plist` without a new version releases nothing.
+
+Pushing a tag by hand still releases that tag, without the version bump:
 
 ```sh
 git tag -a v0.1.1 -m "Cuadro 0.1.1"
 git push origin v0.1.1
 ```
 
-Tags must look like `v1.2.3`, or `v1.2.3-beta.1` for a pre-release. Running the workflow by hand (Actions > release > Run workflow) builds the same files without publishing and attaches them to the run. `make app dist VERSION=1.2.3` produces them locally in `build/dist`.
+Versions must look like `1.2.3`, or `1.2.3-beta.1` for a pre-release. Releases run one at a time, so a bump and a tag pushed for it publish once; the second run fails on the existing release. Running the workflow by hand (Actions > release > Run workflow) builds the same files without publishing and attaches them to the run. `make app dist VERSION=1.2.3` produces them locally in `build/dist`.
 
-The job runs on GitHub's hosted `xcode-27` macOS image because the self-hosted runners are Linux only. While the repository is private, those macOS minutes count against the account's Actions quota.
+The build runs on GitHub's hosted `xcode-27` macOS image because the self-hosted runners are Linux only, after a short `ubuntu-24.04` job that decides whether there is a version to release. While the repository is private, those minutes count against the account's Actions quota.
 
 Publishing requires the `SPARKLE_PRIVATE_KEY` secret (see [Updates](#updates)); a manual run without it skips the feed. Signing depends on which of the other secrets exist:
 
 | Secrets | Result |
 | --- | --- |
 | None | Ad-hoc signed. macOS blocks the first launch of a downloaded copy; allow it in System Settings > Privacy & Security > Open Anyway. Screen Recording must be granted again after every update. |
-| `MACOS_CERTIFICATE_P12`, `MACOS_CERTIFICATE_PASSWORD` with your Apple Development certificate | Stable signature, so the Screen Recording grant survives updates on your Macs. Other Macs still need Open Anyway. |
+| `MACOS_CERTIFICATE_P12`, `MACOS_CERTIFICATE_PASSWORD` from `make signing-identity`, or with your Apple Development certificate | Stable signature, so Screen Recording, Microphone and Accessibility stay allowed across updates. A downloaded copy still needs Open Anyway the first time. |
 | The two above with a Developer ID Application certificate, plus `NOTARY_APPLE_ID`, `NOTARY_TEAM_ID`, `NOTARY_PASSWORD` (app-specific password) | Notarized and stapled; opens normally on any Mac. Needs a paid Apple Developer Program membership. |
 
-Moving from ad-hoc signing to a certificate is a signature change too: the update that brings it asks for Screen Recording one last time, and later ones keep it. Sparkle accepts that update because the EdDSA key stays the same; it allows changing the Apple certificate or the EdDSA key in one update, never both.
+Moving from ad-hoc signing to a certificate is a signature change too: the update that brings it asks for the permissions one last time, and later ones keep them. Sparkle accepts that update because the EdDSA key stays the same; it allows changing the Apple certificate or the EdDSA key in one update, never both.
 
-To add a certificate, export it from Keychain Access (My Certificates, right-click the certificate, Export, `.p12` with a password), then:
+`make signing-identity` sets both secrets. To use an Apple certificate instead, export it from Keychain Access (My Certificates, right-click the certificate, Export, `.p12` with a password), then:
 
 ```sh
 base64 -i Cuadro.p12 | gh secret set MACOS_CERTIFICATE_P12 --repo mrcat71/cuadro
