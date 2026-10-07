@@ -8,11 +8,12 @@ class FloatingPanel: NSPanel {
     init(level: NSWindow.Level = .statusBar, allowsKey: Bool = false, clickThrough: Bool = false) {
         self.allowsKey = allowsKey
         super.init(contentRect: NSRect(x: 0, y: 0, width: 10, height: 10), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        // Before the level: making a panel floating resets its level to `.floating`.
+        isFloatingPanel = true
         self.level = level
         isOpaque = false
         backgroundColor = .clear
         hasShadow = false
-        isFloatingPanel = true
         hidesOnDeactivate = false
         isReleasedWhenClosed = false
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
