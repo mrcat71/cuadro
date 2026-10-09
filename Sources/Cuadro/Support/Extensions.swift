@@ -62,6 +62,13 @@ extension RGBAColor {
     }
 }
 
+extension Duration {
+    /// For timings in the log.
+    var milliseconds: Double {
+        Double(components.seconds) * 1000 + Double(components.attoseconds) / 1e15
+    }
+}
+
 extension Notification.Name {
     static let menuBarIconVisibilityChanged = Notification.Name("CuadroMenuBarIconVisibilityChanged")
     static let historyChanged = Notification.Name("CuadroHistoryChanged")

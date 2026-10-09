@@ -21,6 +21,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         // After the snapshot check: a snapshot run must not delete the files of a running Cuadro.
         ImageExporter.removeStaleTemporaryFiles()
         Updater.shared.start()
+        if permissions.canCapture {
+            ScreenCaptureService.shared.prewarm()
+        }
         if permissions.needsOnboarding {
             OnboardingWindowController.shared.show()
         }

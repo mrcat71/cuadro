@@ -20,17 +20,53 @@ final class ScreenCaptureService {
 
     func isExcluded(_ windowID: CGWindowID) -> Bool { excludedWindowIDs.contains(windowID) }
 
-    /// Captures every display at native resolution.
-    func snapshotAllDisplays(showCursor: Bool) async throws -> [DisplaySnapshot] {
-        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-        var snapshots: [DisplaySnapshot] = []
-        for display in content.displays {
-            if let snapshot = try await snapshot(display: display, content: content, showCursor: showCursor) {
-                snapshots.append(snapshot)
+    /// Captures every display at native resolution, all at once: one after another, a large
+    /// display roughly doubles the wait.
+    /// - Parameter shown: excluded windows ordered in a moment ago, such as the capture curtain.
+    func snapshotAllDisplays(showCursor: Bool, waitingFor shown: [NSWindow] = []) async throws -> [DisplaySnapshot] {
+        let content = try await shareableContent(listing: shown)
+        let snapshots = try await withThrowingTaskGroup(of: (Int, DisplaySnapshot?).self) { group in
+            for (index, display) in content.displays.enumerated() {
+                group.addTask { (index, try await self.snapshot(display: display, content: content, showCursor: showCursor)) }
             }
+            var captured: [(Int, DisplaySnapshot)] = []
+            for try await (index, snapshot) in group {
+                if let snapshot { captured.append((index, snapshot)) }
+            }
+            return captured.sorted { $0.0 < $1.0 }.map(\.1)
         }
         guard !snapshots.isEmpty else { throw CaptureError.noDisplays }
         return snapshots
+    }
+
+    /// The windows on screen once they include `windows`, or those are gone. The window server
+    /// lists a window tens of milliseconds after it is ordered in, a display filter can leave out
+    /// only the windows it lists, and a capture in between shows the window.
+    private func shareableContent(listing windows: [NSWindow]) async throws -> SCShareableContent {
+        let deadline = ContinuousClock.now + .seconds(3)
+        while true {
+            let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+            let listed = Set(content.windows.map(\.windowID))
+            let missing = windows.filter { $0.isVisible && !listed.contains(CGWindowID($0.windowNumber)) }
+            if missing.isEmpty { return content }
+            guard ContinuousClock.now < deadline else {
+                Log.capture.error("Capturing with \(missing.count) windows to leave out still unlisted")
+                return content
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
+    /// Loads ScreenCaptureKit and connects to its service once at launch, so the first capture
+    /// does not wait for that. Only with Screen Recording allowed: without it this would prompt.
+    func prewarm() {
+        Task {
+            do {
+                _ = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+            } catch {
+                Log.capture.error("Warming up ScreenCaptureKit failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
     }
 
     /// Captures one display.

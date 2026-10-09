@@ -98,12 +98,19 @@ final class CaptureCoordinator {
     func beginOverlay(mode: OverlayMode, intent: CaptureIntent, copyOnly: Bool = false) {
         guard !isBusy, ensurePermission() else { return }
         isStarting = true
+        let started = ContinuousClock.now
         let frontmost = NSWorkspace.shared.frontmostApplication
         let windows = WindowList.onScreenWindows()
+        // Selections answer the shortcut right away; picker and ruler do not dim the screen.
+        let curtain = mode == .area || mode == .window ? CaptureCurtain() : nil
         Task { [weak self] in
-            guard let self else { return }
+            guard let self else {
+                curtain?.remove()
+                return
+            }
             do {
-                let snapshots = try await ScreenCaptureService.shared.snapshotAllDisplays(showCursor: settings.showCursor)
+                let snapshots = try await ScreenCaptureService.shared.snapshotAllDisplays(showCursor: settings.showCursor, waitingFor: curtain?.windows ?? [])
+                let captured = ContinuousClock.now - started
                 let controller = OverlayController(snapshots: snapshots, windows: windows, mode: mode, intent: intent) { [weak self] outcome in
                     self?.overlay = nil
                     // The overlay finishes from the mouse-up or Return event, so this is the
@@ -114,7 +121,11 @@ final class CaptureCoordinator {
                 overlay = controller
                 isStarting = false
                 controller.begin()
+                curtain?.remove()
+                let ready = ContinuousClock.now - started
+                Log.capture.notice("Overlay ready in \(ready.milliseconds, format: .fixed(precision: 0)) ms, \(snapshots.count) displays captured in \(captured.milliseconds, format: .fixed(precision: 0)) ms")
             } catch {
+                curtain?.remove()
                 isStarting = false
                 ToastCenter.shared.showError("Capture failed", error)
             }
@@ -125,10 +136,13 @@ final class CaptureCoordinator {
         guard !isBusy, ensurePermission(), let displayID = NSScreen.withMouse?.displayID else { return }
         let frontmost = NSWorkspace.shared.frontmostApplication
         isStarting = true
+        let started = ContinuousClock.now
         Task {
             defer { isStarting = false }
             do {
                 let snapshot = try await ScreenCaptureService.shared.snapshotDisplay(displayID, showCursor: settings.showCursor)
+                let captured = ContinuousClock.now - started
+                Log.capture.notice("Full screen captured in \(captured.milliseconds, format: .fixed(precision: 0)) ms")
                 deliver(CaptureResult(image: snapshot.image, scale: snapshot.scale, kind: .fullscreen, screenRect: snapshot.frame, appName: frontmost?.localizedName), frontmost: frontmost, copyOnly: copyOnly)
             } catch {
                 ToastCenter.shared.showError("Capture failed", error)
