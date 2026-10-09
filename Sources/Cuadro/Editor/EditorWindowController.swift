@@ -59,6 +59,8 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenu
         DockPresence.shared.track(window)
         NSApp.activate()
         window.makeKeyAndOrderFront(nil)
+        // Drawn before the selection overlay above it goes away, so nothing flashes in between.
+        window.displayIfNeeded()
     }
 
     private var canvas: CanvasView? {

@@ -123,6 +123,10 @@ final class OverlayController {
         guard !isFinished else { return }
         isFinished = true
         for task in pixelTasks { task.cancel() }
+        NSCursor.arrow.set()
+        // The frozen screen stays up while the outcome is handled, so an editor opened for it
+        // takes its place directly instead of after a glimpse of the live screen.
+        completion(outcome)
         let closing = panels
         for panel in closing {
             panel.orderOut(nil)
@@ -134,8 +138,6 @@ final class OverlayController {
         panels.removeAll()
         views.removeAll()
         activeView = nil
-        NSCursor.arrow.set()
-        completion(outcome)
     }
 
     // MARK: Pointer
