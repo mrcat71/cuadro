@@ -62,6 +62,9 @@ struct ActionBar: View {
                 Button("Resize…") { model.showsResize = true }
                 Button("Open in Preview") { model.openInPreview() }
                 Button("Print…") { model.printImage() }
+                Divider()
+                // The way to Settings from the editor when the menu bar icon is hidden.
+                Button("Settings…") { SettingsWindowController.shared.show() }
             } label: {
                 Image(systemName: "ellipsis")
                     .frame(width: 30, height: 30)

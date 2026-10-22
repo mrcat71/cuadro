@@ -19,7 +19,7 @@ struct GeneralSettingsPane: View {
                     }
                 Toggle("Show icon in the menu bar", isOn: $settings.showMenuBarIcon)
                 if !settings.showMenuBarIcon {
-                    Text("Open Cuadro again from Finder or Spotlight to get back to Settings.")
+                    Text("To get back to Settings, open Cuadro again from Finder or Spotlight, or choose Settings… in the editor's \(Image(systemName: "ellipsis")) menu. Without the icon, start captures with the shortcuts you set in Shortcuts.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
