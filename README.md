@@ -117,6 +117,7 @@ Global shortcuts work in every app and are set in **Settings > Shortcuts**. Defa
 
 - Screenshots folder: `~/Pictures/Screenshots` by default; file names come from a template such as `Screenshot {date} at {time}` (tokens are listed in Settings > Output).
 - Recent captures: `~/Library/Application Support/Cuadro/History` (30 by default, configurable or off in Settings > General).
+- Menu bar icon: Settings > General hides it, and macOS can hide it too (System Settings > Menu Bar, or a crowded menu bar). To get back to Settings, open Cuadro again from Finder or Spotlight, or choose **Settings…** in the editor's ⋯ menu. Without the icon, captures start from their shortcuts.
 - Preferences: the `io.github.mrcat71.cuadro` defaults domain.
 
 ## Architecture
@@ -199,7 +200,7 @@ Run these after changes to capture or the editor; they need a real screen and in
 - [ ] Recognize Text on a paragraph and on a QR code; Pick Color with a contrast reference; Measure Screen.
 - [ ] Every editor tool: draw, select, move, resize, change style, undo and redo; text editing; crop with auto-trim; backdrop. Step counter: the pointer tip lands on the click and the badge beside it, inside the image near its edges.
 - [ ] Copy, save, Save As in each format, drag out to Finder, share, pin, print.
-- [ ] Settings: record and clear a shortcut, hide the menu bar icon and reopen the app, Launch at login from `~/Applications`.
+- [ ] Settings: record and clear a shortcut; hide the menu bar icon, then get back to Settings by opening the app again and with **Settings…** in the editor's ⋯ menu; Launch at login from `~/Applications`.
 
 ## Not included
 
