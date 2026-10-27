@@ -10,7 +10,7 @@ let package = Package(
     ],
     dependencies: [
         // In-app updates; its bin/ tools (generate_keys, sign_update, generate_appcast) also sign releases.
-        .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.10.0"),
+        .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.10.1"),
     ],
     targets: [
         // Pure logic and rendering: geometry, annotations, stitching, colors, file naming, AAC settings.
