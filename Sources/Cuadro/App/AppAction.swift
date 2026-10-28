@@ -58,10 +58,11 @@ enum AppAction: String, CaseIterable, Identifiable, Codable {
         }
     }
 
-    /// Shottr-compatible defaults; everything else starts unassigned.
+    /// ⇧⌘2 for an area as in Shottr, ⇧⌘1 for Record Screen; everything else starts unassigned.
+    /// Full screen needs no shortcut of its own: Return in the area selection takes the display.
     var defaultShortcut: KeyCombo? {
         switch self {
-        case .captureFullscreen: KeyCombo(keyCode: 0x12, modifiers: [.command, .shift])
+        case .recordScreen: KeyCombo(keyCode: 0x12, modifiers: [.command, .shift])
         case .captureArea: KeyCombo(keyCode: 0x13, modifiers: [.command, .shift])
         default: nil
         }
