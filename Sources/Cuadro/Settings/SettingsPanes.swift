@@ -72,6 +72,7 @@ struct GeneralSettingsPane: View {
 struct CaptureSettingsPane: View {
     @Bindable private var settings = AppSettings.shared
     @State private var status = PermissionStatus()
+    @State private var cameras: [(id: String, name: String)] = []
 
     var body: some View {
         Form {
@@ -93,7 +94,25 @@ struct CaptureSettingsPane: View {
                 Toggle("Show the pointer", isOn: $settings.recordPointer)
                 Toggle("Highlight clicks", isOn: $settings.recordClicks)
                 Toggle("Record system audio", isOn: $settings.recordSystemAudio)
-                Text("Record Screen with Microphone also records the microphone; the microphone button next to Record switches it for one recording. Recordings are saved as MP4 next to your screenshots, copied to the clipboard and shown in Finder.")
+                Toggle("Count down 3 seconds before recording", isOn: $settings.recordCountdown)
+                Text("Each recording starts with system audio and the camera as set here and the microphone off, or on with Record Screen with Microphone; the buttons next to Record switch them for that recording. The \(Image(systemName: "ellipsis")) menu there changes the other settings here. Recordings are saved as MP4 next to your screenshots, copied to the clipboard and shown in Finder.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            Section("Camera") {
+                Toggle("Start recordings with the camera on", isOn: $settings.recordCamera)
+                Picker("Camera", selection: $settings.cameraDeviceID) {
+                    Text("Same as macOS").tag(String?.none)
+                    ForEach(cameras, id: \.id) { camera in
+                        Text(camera.name).tag(Optional(camera.id))
+                    }
+                    // A recording falls back to the camera macOS prefers until it comes back.
+                    if let chosen = settings.cameraDeviceID, !cameras.contains(where: { $0.id == chosen }) {
+                        Text("Disconnected Camera").tag(Optional(chosen))
+                    }
+                }
+                Toggle("Mirror the camera", isOn: $settings.mirrorCamera)
+                Text("The bubble sits in the recording area and the movie shows it. Drag it to move it; it stays in that corner for the next recording.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -130,7 +149,10 @@ struct CaptureSettingsPane: View {
         .formStyle(.grouped)
         .frame(width: paneWidth)
         .fixedSize(horizontal: false, vertical: true)
-        .onAppear { status.startPolling() }
+        .onAppear {
+            status.startPolling()
+            cameras = CameraDevices.available().map { (id: $0.uniqueID, name: $0.localizedName) }
+        }
         .onDisappear { status.stopPolling() }
     }
 }
