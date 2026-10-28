@@ -6,5 +6,8 @@
 	     Record Screen with Microphone needs it. Keep Resources/AdHoc.entitlements in step. -->
 	<key>com.apple.security.device.audio-input</key>
 	<true/>
+	<!-- Likewise for the camera bubble of screen recordings. -->
+	<key>com.apple.security.device.camera</key>
+	<true/>
 </dict>
 </plist>

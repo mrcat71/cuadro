@@ -11,8 +11,9 @@ enum PermissionState {
     case missing
 }
 
-/// Screen Recording (required) and Accessibility (auto-scroll only) permissions. Cuadro needs no
-/// others: its global shortcuts are Carbon hot keys, which work without Input Monitoring.
+/// Screen Recording (required) and Accessibility (auto-scroll only) permissions, and the
+/// microphone and camera that recordings ask for when they first use them. Cuadro needs no others:
+/// its global shortcuts are Carbon hot keys, which work without Input Monitoring.
 final class PermissionCenter {
     static let shared = PermissionCenter()
 
@@ -113,6 +114,22 @@ final class PermissionCenter {
         default:
             if openingSettings {
                 open("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
+            }
+            return false
+        }
+    }
+
+    /// Asks for the camera, which only recordings with the camera bubble use. True when allowed.
+    /// Once refused, only System Settings can turn it on: `openingSettings` opens that pane.
+    func requestCamera(openingSettings: Bool) async -> Bool {
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized:
+            return true
+        case .notDetermined:
+            return await AVCaptureDevice.requestAccess(for: .video)
+        default:
+            if openingSettings {
+                open("x-apple.systempreferences:com.apple.preference.security?Privacy_Camera")
             }
             return false
         }

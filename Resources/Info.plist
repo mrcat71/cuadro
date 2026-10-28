@@ -50,6 +50,8 @@
 	<true/>
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright 2026 Andrey Svinarenko. Apache License 2.0.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Cuadro shows your camera in a bubble on the screen recordings you turn the camera on for.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Cuadro records the microphone only into screen recordings you start with Record Screen with Microphone, or with the microphone switched on next to Record.</string>
 	<key>NSPrincipalClass</key>

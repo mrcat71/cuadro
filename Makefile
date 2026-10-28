@@ -36,7 +36,8 @@ endif
 # Notarization needs a secure timestamp: CODESIGN_TIMESTAMP=--timestamp
 CODESIGN_TIMESTAMP ?= --timestamp=none
 SIGN = codesign --force --options runtime $(CODESIGN_TIMESTAMP) --sign "$(SIGN_IDENTITY)"
-# The hardened runtime needs the audio-input entitlement for the microphone. A signature without a
+# The hardened runtime needs the audio-input and camera entitlements for the microphone and the
+# camera bubble of recordings. A signature without a
 # team ID (ad-hoc or self-signed) also makes library validation refuse to load Sparkle ("different
 # Team IDs"): AdHoc.entitlements turns that off too. An Apple identity signs app and framework with
 # one team. The app recipe tells them apart by the framework's signature.
