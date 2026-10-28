@@ -60,6 +60,9 @@ final class OverlayController {
 
     private let settings = AppSettings.shared
 
+    /// How far a press in window mode moves before it draws an area instead (recordings only).
+    private static let dragThreshold: CGFloat = 4
+
     init(snapshots: [DisplaySnapshot], windows: [WindowInfo], mode: OverlayMode, intent: CaptureIntent, completion: @escaping (OverlayOutcome) -> Void) {
         self.snapshots = snapshots
         self.windows = windows
@@ -171,7 +174,13 @@ final class OverlayController {
             selection = nil
             isDragging = true
         case .window:
-            break
+            // Recording: a drag from here draws an area of its own instead of taking the window.
+            if intent == .record {
+                dragOrigin = snapped(pointer, scale: view.snapshot.scale)
+                lastDragPoint = pointer
+                selection = nil
+                isDragging = true
+            }
         case .picker:
             if event.modifierFlags.contains(.shift) {
                 referenceColor = color(at: pointer, in: view)
@@ -187,6 +196,12 @@ final class OverlayController {
     func pointerDragged(in view: OverlayView, to point: CGPoint, event: NSEvent) {
         guard isDragging, view === activeView else { return }
         let current = clamped(point, in: view)
+        if mode == .window {
+            // A press that moves on is a drag for an area, not a click on the window.
+            guard let origin = dragOrigin, origin.distance(to: current) >= Self.dragThreshold else { return }
+            mode = .area
+            hoveredWindow = nil
+        }
         if spaceHeld, let last = lastDragPoint, let origin = dragOrigin {
             // Space moves the whole selection instead of resizing it.
             dragOrigin = origin + (current - last)
@@ -201,6 +216,9 @@ final class OverlayController {
         let global = view.globalPoint(fromLocal: clamped(point, in: view))
         switch mode {
         case .window:
+            isDragging = false
+            spaceHeld = false
+            dragOrigin = nil
             if let target = hoveredWindow ?? window(at: global) {
                 completeWindowSelection(target, in: view)
             }
@@ -461,7 +479,7 @@ final class OverlayController {
             }
         case .window:
             state.hint = intent == .record
-                ? "Click the window to record   Space: area mode   Return: full screen   Esc: cancel"
+                ? "Click a window to record   Drag: area   Return: full screen   Esc: cancel"
                 : "Click a window   Space: area mode   Return: full screen   Esc: cancel"
         case .picker:
             state.hint = "Click: copy color   Shift-click: compare contrast   Arrows: nudge   Esc: cancel"

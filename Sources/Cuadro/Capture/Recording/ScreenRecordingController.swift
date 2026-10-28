@@ -33,9 +33,10 @@ struct RecordingDisplay {
     }
 }
 
-/// One Record Screen: the frame shown for adjusting, the recording, during which dragging the
-/// controls moves the frame and pans the movie, also onto another display, and the movie saved
-/// to the screenshots folder.
+/// One Record Screen: the frame shown for adjusting with the sources and options of the
+/// recording, an optional countdown, the recording, during which dragging the controls moves the
+/// frame and pans the movie, also onto another display, and which can pause, and the movie saved
+/// to the screenshots folder. The camera bubble, if on, stays in the frame throughout.
 final class ScreenRecordingController {
     /// The display the frame is on.
     private var display: RecordingDisplay
@@ -45,35 +46,45 @@ final class ScreenRecordingController {
     private(set) var area: CGRect
     private let returnFocus: () -> Void
     private let completion: () -> Void
+    private let settings = AppSettings.shared
     private let model = RecordingControlsModel()
     private var session: RecordingSession?
     /// The movie's pixels, and the pixels per point of the display it started on.
     private var movieSize = CGSize.zero
     private var movieScale: CGFloat = 1
-    /// What ScreenCaptureKit can record, from the start of the recording: the displays and
-    /// Cuadro's own app, which every stream leaves out.
-    private var shareable: (displays: [SCDisplay], excluded: [SCRunningApplication])?
+    /// What ScreenCaptureKit can record, from the start of the recording: the displays, Cuadro's
+    /// own app, which every stream leaves out, and the camera bubble, which they let in.
+    private var shareable: (displays: [SCDisplay], excluded: [SCRunningApplication], included: [SCWindow])?
     private var shield: RecordingShieldWindow?
     private var shieldView: RecordingShieldView?
     private var borderPanel: FloatingPanel?
     private var controlsPanel: RecordingControlsPanel?
+    private var bubble: CameraBubble?
+    private let countdown = CountdownHUD()
     private var timer: Timer?
     private var startDate = Date()
+    /// The pauses on the wall clock, for the timer.
+    private var pauses = PauseTimeline()
     /// Pointer, area and controls origin, all Cocoa global, when a drag of the controls began.
     private var controlsDrag: (pointer: CGPoint, area: CGRect, controls: CGPoint)?
     private var isFinished = false
 
     var phase: RecordingControlsModel.Phase { model.phase }
-    var isAdjusting: Bool { phase == .adjusting || phase == .starting }
+    var isAdjusting: Bool { phase == .adjusting || phase == .countingDown || phase == .starting }
     var isRecording: Bool { phase == .recording || phase == .stopping }
-    var elapsed: TimeInterval { Date().timeIntervalSince(startDate) }
+    var isPaused: Bool { model.isPaused }
+    /// The recorded time so far, without the pauses.
+    var elapsed: TimeInterval {
+        pauses.clampedMovieTime(for: Date().timeIntervalSinceReferenceDate) - startDate.timeIntervalSinceReferenceDate
+    }
 
     /// - Parameters:
     ///   - area: display-local y-down points.
     ///   - microphone: starts with the microphone on (Record Screen with Microphone).
+    ///   - camera: starts with the camera bubble on.
     ///   - returnFocus: gives focus back to the app that was active before the selection.
     ///   - completion: the controller is done: cancelled, failed or saved.
-    init(display: RecordingDisplay, area: CGRect, microphone: Bool, returnFocus: @escaping () -> Void, completion: @escaping () -> Void) {
+    init(display: RecordingDisplay, area: CGRect, microphone: Bool, camera: Bool, returnFocus: @escaping () -> Void, completion: @escaping () -> Void) {
         self.display = display
         displays = [display] + NSScreen.screens.compactMap { screen in
             guard let id = screen.displayID, id != display.displayID else { return nil }
@@ -83,6 +94,8 @@ final class ScreenRecordingController {
         self.returnFocus = returnFocus
         self.completion = completion
         model.microphone = microphone
+        model.systemAudio = settings.recordSystemAudio
+        model.camera = camera
         model.size = self.area.size
     }
 
@@ -91,6 +104,9 @@ final class ScreenRecordingController {
     func begin() {
         showShield()
         showControls()
+        if model.camera {
+            switchCamera(on: true)
+        }
     }
 
     /// Dims the frame's display and takes the pointer and the keyboard there, in place of the
@@ -118,18 +134,43 @@ final class ScreenRecordingController {
         switch phase {
         case .adjusting: record()
         case .recording: stop()
-        case .starting, .stopping: break
+        case .countingDown, .starting, .stopping: break
         }
     }
 
+    /// Drops the recording before it starts; during the countdown, goes back to adjusting.
     func cancel() {
-        guard phase == .adjusting else { return }
-        returnFocus()
-        finish()
+        switch phase {
+        case .adjusting:
+            returnFocus()
+            finish()
+        case .countingDown:
+            countdown.cancel()
+            model.phase = .adjusting
+        case .starting, .recording, .stopping:
+            break
+        }
     }
 
     func stop() {
         finishRecording(failure: nil)
+    }
+
+    /// Pauses the running recording or resumes it: the movie leaves the pause out.
+    func togglePause() {
+        guard phase == .recording, let session else { return }
+        let now = Date().timeIntervalSinceReferenceDate
+        if model.isPaused {
+            session.resume()
+            pauses.resume(at: now)
+        } else {
+            session.pause()
+            pauses.pause(at: now)
+        }
+        model.isPaused = pauses.isPaused
+        model.elapsed = elapsed
+        NotificationCenter.default.post(name: .recordingChanged, object: nil)
+        Log.capture.notice("Recording \(self.model.isPaused ? "paused" : "resumed", privacy: .public) at \(self.elapsed, format: .fixed(precision: 1)) s")
     }
 
     // MARK: Adjusting
@@ -143,6 +184,7 @@ final class ScreenRecordingController {
         area = newArea
         model.size = newArea.size
         placeControls()
+        placeBubble()
     }
 
     private func toggleMicrophone() {
@@ -158,11 +200,145 @@ final class ScreenRecordingController {
             let allowed = await Self.allowMicrophone(openingSettings: false)
             guard phase == .adjusting else { return }
             model.microphone = allowed
-            if asks, let shield {
-                shield.orderFrontRegardless()
-                NSApp.activate()
-                shield.makeKey()
+            if asks { bringBackShield() }
+        }
+    }
+
+    /// Shows the dimmed screen again after a system prompt, and takes the keyboard back.
+    private func bringBackShield() {
+        guard let shield else { return }
+        shield.orderFrontRegardless()
+        NSApp.activate()
+        shield.makeKey()
+    }
+
+    /// For this recording only; the next one starts as Settings > Capture says.
+    private func toggleSystemAudio() {
+        guard phase == .adjusting else { return }
+        model.systemAudio.toggle()
+    }
+
+    private func toggleCamera() {
+        guard phase == .adjusting else { return }
+        switchCamera(on: !model.camera)
+    }
+
+    /// Shows or removes the camera bubble for this recording; the next one starts as Settings >
+    /// Capture says. Asks for the camera first if macOS has not asked yet.
+    private func switchCamera(on: Bool) {
+        model.camera = on
+        guard on else {
+            removeBubble()
+            return
+        }
+        // macOS asks in a window of its own, which the dimmed screen would cover.
+        let asks = AVCaptureDevice.authorizationStatus(for: .video) == .notDetermined
+        if asks { shield?.orderOut(nil) }
+        Task {
+            let allowed = await PermissionCenter.shared.requestCamera(openingSettings: false)
+            if asks { bringBackShield() }
+            // Switched off again, or recording already, while macOS asked.
+            guard phase == .adjusting, model.camera else { return }
+            guard allowed else {
+                model.camera = false
+                ToastCenter.shared.show(
+                    "The camera is off for Cuadro",
+                    detail: "Turn Cuadro on in System Settings > Privacy & Security > Camera.",
+                    style: .warning, symbol: "video.slash", duration: 5
+                )
+                return
             }
+            showBubble()
+        }
+    }
+
+    /// Shows the bubble and starts its camera, or switches the camera of the bubble shown.
+    private func showBubble() {
+        let bubble = self.bubble ?? CameraBubble(mirrored: settings.mirrorCamera)
+        if self.bubble == nil {
+            bubble.onMove = { [weak self] anchor in self?.settings.cameraBubbleAnchor = anchor }
+            self.bubble = bubble
+            ScreenCaptureService.shared.exclude(bubble.panel)
+            placeBubble()
+        }
+        Task {
+            do {
+                try await bubble.start(deviceID: settings.cameraDeviceID)
+            } catch {
+                // Switched off meanwhile, or another bubble since.
+                guard self.bubble === bubble else { return }
+                ToastCenter.shared.showError("Could not show the camera", error)
+                // Also once recording: the movie would show the placeholder instead.
+                model.camera = false
+                removeBubble()
+            }
+        }
+    }
+
+    private func placeBubble() {
+        bubble?.place(in: area, on: display, anchor: settings.cameraBubbleAnchor)
+    }
+
+    private func removeBubble() {
+        bubble?.remove()
+        bubble = nil
+    }
+
+    /// The ⋯ menu below its button: the camera and its mirroring, the pointer, clicks and the
+    /// countdown.
+    private func showOptions() {
+        guard phase == .adjusting, let content = controlsPanel?.contentView, let button = model.buttonFrames["options"] else { return }
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+
+        let cameras = CameraDevices.available()
+        let chosen = CameraDevices.device(for: settings.cameraDeviceID)?.uniqueID
+        let cameraMenu = NSMenu()
+        if cameras.isEmpty {
+            let none = NSMenuItem(title: "No Camera Connected", action: nil, keyEquivalent: "")
+            none.isEnabled = false
+            cameraMenu.addItem(none)
+        }
+        for camera in cameras {
+            let uniqueID = camera.uniqueID
+            let item = NSMenuItem.action(camera.localizedName) { [weak self] in self?.chooseCamera(uniqueID) }
+            item.state = uniqueID == chosen ? .on : .off
+            cameraMenu.addItem(item)
+        }
+        let cameraItem = NSMenuItem(title: "Camera", action: nil, keyEquivalent: "").with(symbol: "video")
+        cameraItem.submenu = cameraMenu
+        menu.addItem(cameraItem)
+        menu.addItem(toggleItem("Mirror Camera", isOn: settings.mirrorCamera) { [weak self] in
+            guard let self else { return }
+            settings.mirrorCamera.toggle()
+            bubble?.setMirrored(settings.mirrorCamera)
+        })
+        menu.addItem(.separator())
+        menu.addItem(toggleItem("Show Pointer", isOn: settings.recordPointer) { [weak self] in self?.settings.recordPointer.toggle() })
+        menu.addItem(toggleItem("Highlight Clicks", isOn: settings.recordClicks) { [weak self] in self?.settings.recordClicks.toggle() })
+        menu.addItem(.separator())
+        menu.addItem(toggleItem("Count Down 3 Seconds", isOn: settings.recordCountdown) { [weak self] in self?.settings.recordCountdown.toggle() })
+
+        // The button's frame is in the controls' y-down points.
+        var point = CGPoint(x: button.minX, y: button.maxY + 6)
+        if !content.isFlipped { point.y = content.bounds.height - point.y }
+        menu.popUp(positioning: nil, at: point, in: content)
+    }
+
+    private func toggleItem(_ title: String, isOn: Bool, action: @escaping () -> Void) -> NSMenuItem {
+        let item = NSMenuItem.action(title, handler: action)
+        item.state = isOn ? .on : .off
+        return item
+    }
+
+    /// Picking a camera also switches the camera on.
+    private func chooseCamera(_ uniqueID: String) {
+        guard phase == .adjusting else { return }
+        settings.cameraDeviceID = uniqueID
+        if model.camera {
+            showBubble()
+        } else {
+            switchCamera(on: true)
         }
     }
 
@@ -180,12 +356,26 @@ final class ScreenRecordingController {
 
     // MARK: Recording
 
+    /// Starts the recording, after a countdown over the area if that is on.
     private func record() {
         guard phase == .adjusting else { return }
+        guard settings.recordCountdown else {
+            startRecording()
+            return
+        }
+        model.phase = .countingDown
+        let frame = display.globalRect(area)
+        countdown.start(seconds: 3, at: CGPoint(x: frame.midX, y: frame.midY)) { [weak self] in
+            self?.startRecording()
+        }
+    }
+
+    private func startRecording() {
+        guard phase == .adjusting || phase == .countingDown else { return }
         model.phase = .starting
         // Access may have been withdrawn in System Settings since the microphone was switched on.
         model.microphone = model.microphone && AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
-        let options = RecordingOptions.current(microphone: model.microphone)
+        let options = RecordingOptions.current(microphone: model.microphone, systemAudio: model.systemAudio)
         Task { [weak self] in
             guard let self else { return }
             do {
@@ -212,7 +402,8 @@ final class ScreenRecordingController {
                 self.timer = timer
                 returnFocus()
                 NotificationCenter.default.post(name: .recordingChanged, object: nil)
-                Log.capture.notice("Recording started: \(Int(self.area.width)) × \(Int(self.area.height)) pt, microphone \(options.microphone ? "on" : "off", privacy: .public)")
+                let camera = bubble?.isShown == true && shareable?.included.isEmpty == false
+                Log.capture.notice("Recording started: \(Int(self.area.width)) × \(Int(self.area.height)) pt, microphone \(options.microphone ? "on" : "off", privacy: .public), system audio \(options.systemAudio ? "on" : "off", privacy: .public), camera \(camera ? "on" : "off", privacy: .public)")
             } catch {
                 session = nil
                 ToastCenter.shared.showError("Could not start recording", error)
@@ -222,11 +413,23 @@ final class ScreenRecordingController {
         }
     }
 
-    /// A stream of the whole display without Cuadro's own windows, cropped to the area.
+    /// A stream of the whole display without Cuadro's own windows but the camera bubble, cropped
+    /// to the area.
     private func makeSession(options: RecordingOptions) async throws -> RecordingSession {
-        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        let bubbleWindow = bubble?.isShown == true ? bubble?.panel : nil
+        // The stream can let in only a window the window server lists, which takes a moment
+        // after the bubble first shows.
+        let content = try await ScreenCaptureService.shared.shareableContent(listing: bubbleWindow.map { [$0] } ?? [])
         let ownPID = ProcessInfo.processInfo.processIdentifier
-        shareable = (content.displays, content.applications.filter { $0.processID == ownPID })
+        var included: [SCWindow] = []
+        if let bubbleWindow {
+            if let listed = content.windows.first(where: { $0.windowID == CGWindowID(bubbleWindow.windowNumber) }) {
+                included.append(listed)
+            } else {
+                Log.capture.error("The camera bubble is not listed; the movie leaves it out")
+            }
+        }
+        shareable = (content.displays, content.applications.filter { $0.processID == ownPID }, included)
         guard let source = source(for: display) else { throw CaptureError.noDisplays }
         let pixels = RecordingArea.pixelSize(of: area, scale: display.scale)
         movieSize = CGSize(width: pixels.width, height: pixels.height)
@@ -241,10 +444,11 @@ final class ScreenRecordingController {
         )
     }
 
-    /// The stream source for `display`: all of it but Cuadro's own windows.
+    /// The stream source for `display`: all of it but Cuadro's own windows, except the camera
+    /// bubble.
     private func source(for display: RecordingDisplay) -> RecordingSource? {
         guard let shareable, let screen = shareable.displays.first(where: { $0.displayID == display.displayID }) else { return nil }
-        let filter = SCContentFilter(display: screen, excludingApplications: shareable.excluded, exceptingWindows: [])
+        let filter = SCContentFilter(display: screen, excludingApplications: shareable.excluded, exceptingWindows: shareable.included)
         return RecordingSource(displayID: display.displayID, filter: filter, frameSize: display.pixelSize)
     }
 
@@ -259,10 +463,12 @@ final class ScreenRecordingController {
         model.phase = .stopping
         timer?.invalidate()
         let duration = elapsed
-        removeChrome()
+        // The movie shows the bubble up to its last frame; `finish` removes it.
+        removeChrome(keepingBubble: true)
         Task {
             do {
                 try await session.stop()
+                removeBubble()
                 let saved = try Self.save(session.outputURL)
                 Pasteboard.copy(fileURL: saved)
                 let frames = session.frameCounts
@@ -342,8 +548,9 @@ final class ScreenRecordingController {
         guard newArea != area || changesDisplay else { return }
         area = newArea
         display = target
+        placeBubble()
         switch phase {
-        case .adjusting, .starting:
+        case .adjusting, .countingDown, .starting:
             if changesDisplay {
                 showShield()
             } else {
@@ -376,7 +583,11 @@ final class ScreenRecordingController {
             record: { [weak self] in self?.record() },
             cancel: { [weak self] in self?.cancel() },
             stop: { [weak self] in self?.stop() },
-            toggleMicrophone: { [weak self] in self?.toggleMicrophone() }
+            togglePause: { [weak self] in self?.togglePause() },
+            toggleMicrophone: { [weak self] in self?.toggleMicrophone() },
+            toggleSystemAudio: { [weak self] in self?.toggleSystemAudio() },
+            toggleCamera: { [weak self] in self?.toggleCamera() },
+            showOptions: { [weak self] in self?.showOptions() }
         ))
         controlsPanel = panel
         placeControls()
@@ -391,7 +602,7 @@ final class ScreenRecordingController {
 
     private func showBorder() {
         let border = FloatingPanel(level: .statusBar, clickThrough: true)
-        border.host(RecordingBorderView(size: area.size))
+        border.host(RecordingBorderView(size: area.size, model: model))
         border.setFrame(display.globalRect(area).insetBy(dx: -4, dy: -4), display: false)
         border.orderFrontRegardless()
         borderPanel = border
@@ -405,7 +616,11 @@ final class ScreenRecordingController {
         )
     }
 
-    private func removeChrome() {
+    private func removeChrome(keepingBubble: Bool = false) {
+        countdown.cancel()
+        if !keepingBubble {
+            removeBubble()
+        }
         retire([shield, borderPanel, controlsPanel])
         shield = nil
         shieldView = nil
@@ -430,6 +645,14 @@ final class ScreenRecordingController {
     /// `--ui-snapshot`: removes whatever this controller shows.
     func debugDismiss() {
         finish()
+    }
+
+    /// `--ui-snapshot`: the camera bubble with a placeholder in place of the camera.
+    func debugShowCameraPlaceholder() {
+        let bubble = CameraBubble(mirrored: false, placeholder: true)
+        self.bubble = bubble
+        model.camera = true
+        placeBubble()
     }
 
     /// `--ui-snapshot`: the controls as they look while recording, without recording.

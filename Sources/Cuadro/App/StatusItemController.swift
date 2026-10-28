@@ -39,14 +39,23 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         }
     }
 
-    /// A red record symbol while a screen recording runs.
+    /// A red record symbol while a screen recording runs, an orange pause symbol while it pauses.
     private func updateIcon() {
         guard let button = statusItem?.button else { return }
-        let recording = CaptureCoordinator.shared.isRecording
-        let image = NSImage(systemSymbolName: recording ? "record.circle" : "viewfinder", accessibilityDescription: recording ? "Cuadro, recording" : "Cuadro")
+        let coordinator = CaptureCoordinator.shared
+        let image: NSImage?
+        if coordinator.isRecordingPaused {
+            image = NSImage(systemSymbolName: "pause.circle", accessibilityDescription: "Cuadro, recording paused")
+            button.contentTintColor = .systemOrange
+        } else if coordinator.isRecording {
+            image = NSImage(systemSymbolName: "record.circle", accessibilityDescription: "Cuadro, recording")
+            button.contentTintColor = .systemRed
+        } else {
+            image = NSImage(systemSymbolName: "viewfinder", accessibilityDescription: "Cuadro")
+            button.contentTintColor = nil
+        }
         image?.isTemplate = true
         button.image = image
-        button.contentTintColor = recording ? .systemRed : nil
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
@@ -54,6 +63,9 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         if let elapsed = CaptureCoordinator.shared.recordingElapsed {
             let stop = NSMenuItem.action("Stop Recording (\(RecordingControlsView.format(elapsed)))") { CaptureCoordinator.shared.toggleRecording() }
             menu.addItem(stop.with(symbol: "stop.circle"))
+            let paused = CaptureCoordinator.shared.isRecordingPaused
+            let pause = NSMenuItem.action(paused ? "Resume Recording" : "Pause Recording") { CaptureCoordinator.shared.toggleRecordingPause() }
+            menu.addItem(pause.with(symbol: paused ? "play.circle" : "pause.circle"))
             menu.addItem(.separator())
         }
         let screenRecording = PermissionCenter.shared.screenRecordingState

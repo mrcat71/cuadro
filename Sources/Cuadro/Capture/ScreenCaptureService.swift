@@ -41,8 +41,8 @@ final class ScreenCaptureService {
 
     /// The windows on screen once they include `windows`, or those are gone. The window server
     /// lists a window tens of milliseconds after it is ordered in, a display filter can leave out
-    /// only the windows it lists, and a capture in between shows the window.
-    private func shareableContent(listing windows: [NSWindow]) async throws -> SCShareableContent {
+    /// or let in only the windows it lists, and a capture in between gets the window wrong.
+    func shareableContent(listing windows: [NSWindow]) async throws -> SCShareableContent {
         let deadline = ContinuousClock.now + .seconds(3)
         while true {
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)

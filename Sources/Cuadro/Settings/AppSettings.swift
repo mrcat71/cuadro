@@ -92,7 +92,17 @@ final class AppSettings {
     var autoScrollSpeed: Double { didSet { defaults.set(autoScrollSpeed, forKey: Keys.autoScrollSpeed) } }
     var recordPointer: Bool { didSet { defaults.set(recordPointer, forKey: Keys.recordPointer) } }
     var recordClicks: Bool { didSet { defaults.set(recordClicks, forKey: Keys.recordClicks) } }
+    /// Where each recording starts; the switch next to Record changes it for one recording.
     var recordSystemAudio: Bool { didSet { defaults.set(recordSystemAudio, forKey: Keys.recordSystemAudio) } }
+    var recordCountdown: Bool { didSet { defaults.set(recordCountdown, forKey: Keys.recordCountdown) } }
+    /// Starts each recording with the camera in a bubble on the area, which the movie includes;
+    /// the switch next to Record changes it for one recording.
+    var recordCamera: Bool { didSet { defaults.set(recordCamera, forKey: Keys.recordCamera) } }
+    /// `AVCaptureDevice.uniqueID` of the camera; nil follows the camera macOS prefers.
+    var cameraDeviceID: String? { didSet { defaults.set(cameraDeviceID, forKey: Keys.cameraDeviceID) } }
+    /// Where the bubble sits in the recording area, see `CameraBubbleLayout`.
+    var cameraBubbleAnchor: CGPoint { didSet { store(cameraBubbleAnchor, forKey: Keys.cameraBubbleAnchor) } }
+    var mirrorCamera: Bool { didSet { defaults.set(mirrorCamera, forKey: Keys.mirrorCamera) } }
     /// Last onboarding version the user finished (0: never), see `PermissionCenter.onboardingVersion`.
     var completedOnboardingVersion: Int { didSet { defaults.set(completedOnboardingVersion, forKey: Keys.completedOnboardingVersion) } }
 
@@ -131,7 +141,12 @@ final class AppSettings {
         autoScrollSpeed = defaults.object(forKey: Keys.autoScrollSpeed) as? Double ?? 1
         recordPointer = defaults.object(forKey: Keys.recordPointer) as? Bool ?? true
         recordClicks = defaults.object(forKey: Keys.recordClicks) as? Bool ?? true
-        recordSystemAudio = defaults.object(forKey: Keys.recordSystemAudio) as? Bool ?? false
+        recordSystemAudio = defaults.object(forKey: Keys.recordSystemAudio) as? Bool ?? true
+        recordCountdown = defaults.object(forKey: Keys.recordCountdown) as? Bool ?? false
+        recordCamera = defaults.object(forKey: Keys.recordCamera) as? Bool ?? false
+        cameraDeviceID = defaults.string(forKey: Keys.cameraDeviceID)
+        cameraBubbleAnchor = Self.load(CGPoint.self, from: defaults, key: Keys.cameraBubbleAnchor) ?? CameraBubbleLayout.defaultAnchor
+        mirrorCamera = defaults.object(forKey: Keys.mirrorCamera) as? Bool ?? true
         completedOnboardingVersion = defaults.integer(forKey: Keys.completedOnboardingVersion)
         shortcuts = Self.loadShortcuts(from: defaults)
         toolStyles = Self.load([String: AnnotationStyle].self, from: defaults, key: Keys.toolStyles) ?? [:]
@@ -246,6 +261,11 @@ final class AppSettings {
         static let recordPointer = "recordPointer"
         static let recordClicks = "recordClicks"
         static let recordSystemAudio = "recordSystemAudio"
+        static let recordCountdown = "recordCountdown"
+        static let recordCamera = "recordCamera"
+        static let cameraDeviceID = "cameraDeviceID"
+        static let cameraBubbleAnchor = "cameraBubbleAnchor"
+        static let mirrorCamera = "mirrorCamera"
         static let completedOnboardingVersion = "completedOnboardingVersion"
         static let shortcuts = "shortcuts"
         static let toolStyles = "toolStyles"

@@ -20,6 +20,11 @@ final class CaptureCoordinator {
     /// The recording frame is shown for adjusting, before the recording starts.
     var isAdjustingRecording: Bool { recorder?.isAdjusting == true }
     var recordingElapsed: TimeInterval? { isRecording ? recorder?.elapsed : nil }
+    var isRecordingPaused: Bool { isRecording && recorder?.isPaused == true }
+
+    func toggleRecordingPause() {
+        recorder?.togglePause()
+    }
 
     /// - Parameter copyOnly: Control was held (a Control variant of the shortcut, or a menu
     ///   click): the screenshot only goes to the clipboard, nothing opens.
@@ -42,8 +47,8 @@ final class CaptureCoordinator {
         }
     }
 
-    /// Starts picking the area to record; with a recording under way, starts it once its frame
-    /// is adjusted or stops it.
+    /// Starts picking the window or area to record; with a recording under way, starts it once
+    /// its frame is adjusted or stops it.
     func toggleRecording(microphone: Bool = false) {
         if let recorder {
             recorder.primaryAction()
@@ -52,7 +57,7 @@ final class CaptureCoordinator {
         guard !isBusy, ensurePermission() else { return }
         guard microphone else {
             recordsMicrophone = false
-            beginOverlay(mode: .area, intent: .record)
+            beginOverlay(mode: .window, intent: .record)
             return
         }
         // Ask before the overlay, which would cover the system prompt.
@@ -62,7 +67,7 @@ final class CaptureCoordinator {
             isStarting = false
             guard allowed else { return }
             recordsMicrophone = true
-            beginOverlay(mode: .area, intent: .record)
+            beginOverlay(mode: .window, intent: .record)
         }
     }
 
@@ -253,7 +258,7 @@ final class CaptureCoordinator {
     private func beginRecording(display: DisplaySnapshot, region: CGRect, frontmost: NSRunningApplication?) {
         guard recorder == nil else { return }
         let controller = ScreenRecordingController(
-            display: RecordingDisplay(display), area: region, microphone: recordsMicrophone,
+            display: RecordingDisplay(display), area: region, microphone: recordsMicrophone, camera: settings.recordCamera,
             returnFocus: { [weak self] in self?.restoreFocus(frontmost) }
         ) { [weak self] in
             self?.recorder = nil

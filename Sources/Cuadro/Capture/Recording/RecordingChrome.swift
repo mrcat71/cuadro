@@ -9,7 +9,7 @@ import SwiftUI
 @Observable
 final class RecordingControlsModel {
     enum Phase {
-        case adjusting, starting, recording, stopping
+        case adjusting, countingDown, starting, recording, stopping
     }
 
     var phase = Phase.adjusting
@@ -17,6 +17,9 @@ final class RecordingControlsModel {
     /// The area in points, for the size label while adjusting.
     var size = CGSize.zero
     var microphone = false
+    var systemAudio = false
+    var camera = false
+    var isPaused = false
     /// Where the buttons are, in the controls' y-down points: a press anywhere else drags.
     @ObservationIgnored var buttonFrames: [String: CGRect] = [:]
 
@@ -64,15 +67,20 @@ final class RecordingControlsPanel: FloatingPanel {
     }
 }
 
-/// The bar below the recording frame: size, microphone, Cancel and Record while the frame is
-/// adjusted, then the timer and Stop. Dragging the bar moves the frame, also while recording;
-/// `RecordingControlsPanel` runs that drag.
+/// The bar below the recording frame: size, the microphone, system audio and camera switches,
+/// the options menu, Cancel and Record while the frame is adjusted, then the timer, Pause and
+/// Stop. Dragging the bar moves the frame, also while recording; `RecordingControlsPanel` runs
+/// that drag.
 struct RecordingControlsView: View {
     let model: RecordingControlsModel
     var record: () -> Void = {}
     var cancel: () -> Void = {}
     var stop: () -> Void = {}
+    var togglePause: () -> Void = {}
     var toggleMicrophone: () -> Void = {}
+    var toggleSystemAudio: () -> Void = {}
+    var toggleCamera: () -> Void = {}
+    var showOptions: () -> Void = {}
 
     var body: some View {
         HStack(spacing: 10) {
@@ -81,7 +89,7 @@ struct RecordingControlsView: View {
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
             switch model.phase {
-            case .adjusting, .starting: adjustingControls
+            case .adjusting, .countingDown, .starting: adjustingControls
             case .recording, .stopping: recordingControls
             }
         }
@@ -102,40 +110,83 @@ struct RecordingControlsView: View {
             .monospacedDigit()
             .foregroundStyle(.secondary)
             .accessibilityLabel("Area \(width) by \(height) points")
-        Button(action: toggleMicrophone) {
-            Image(systemName: model.microphone ? "mic.fill" : "mic.slash")
-                .frame(width: 16)
+        Group {
+            switchButton(
+                "microphone", isOn: model.microphone, on: "mic.fill", off: "mic.slash",
+                label: "Microphone", source: "the microphone", action: toggleMicrophone
+            )
+            switchButton(
+                "systemAudio", isOn: model.systemAudio, on: "speaker.wave.2.fill", off: "speaker.slash",
+                label: "System audio", source: "the sound of your Mac", action: toggleSystemAudio
+            )
+            switchButton(
+                "camera", isOn: model.camera, on: "video.fill", off: "video.slash",
+                label: "Camera", source: "your camera in a bubble", action: toggleCamera
+            )
+            Button(action: showOptions) {
+                Image(systemName: "ellipsis")
+                    .frame(width: 16, height: 16)
+            }
+            .buttonStyle(.glass)
+            .help("Camera, pointer and countdown options")
+            .accessibilityLabel("Options")
+            .reportsButtonFrame("options", to: model)
         }
-        .buttonStyle(.glass)
-        .help(model.microphone ? "Records the microphone. Click to leave it out." : "Leaves the microphone out. Click to record it.")
-        .accessibilityLabel(model.microphone ? "Microphone on" : "Microphone off")
-        .reportsButtonFrame("microphone", to: model)
+        .disabled(model.phase != .adjusting)
         Button("Cancel", action: cancel)
             .buttonStyle(.glass)
+            .disabled(model.phase == .starting)
             .reportsButtonFrame("cancel", to: model)
         Button(action: record) {
             Label("Record", systemImage: "record.circle")
         }
         .buttonStyle(RecordingActionStyle())
-        .disabled(model.phase == .starting)
+        .disabled(model.phase != .adjusting)
         .reportsButtonFrame("record", to: model)
+    }
+
+    /// A switch for one source of the recording.
+    private func switchButton(_ name: String, isOn: Bool, on: String, off: String, label: String, source: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: isOn ? on : off)
+                .frame(width: 16, height: 16)
+        }
+        .buttonStyle(.glass)
+        .help(isOn ? "Records \(source). Click to leave it out." : "Leaves \(source) out. Click to record it.")
+        .accessibilityLabel("\(label) \(isOn ? "on" : "off")")
+        .reportsButtonFrame(name, to: model)
     }
 
     @ViewBuilder private var recordingControls: some View {
         Circle()
-            .fill(.red)
+            .fill(model.isPaused ? Color.orange : Color.red)
             .frame(width: 10, height: 10)
             .accessibilityHidden(true)
         Text(Self.format(model.elapsed))
             .font(.system(size: 14, weight: .semibold))
             .monospacedDigit()
             .contentTransition(.numericText())
-            .accessibilityLabel("Recording, \(Int(model.elapsed)) seconds")
+            .foregroundStyle(model.isPaused ? .secondary : .primary)
+            .accessibilityLabel("\(model.isPaused ? "Paused" : "Recording"), \(Int(model.elapsed)) seconds")
         if model.microphone {
             Image(systemName: "mic.fill")
                 .foregroundStyle(.secondary)
                 .accessibilityLabel("With the microphone")
         }
+        if model.systemAudio {
+            Image(systemName: "speaker.wave.2.fill")
+                .foregroundStyle(.secondary)
+                .accessibilityLabel("With system audio")
+        }
+        Button(action: togglePause) {
+            Image(systemName: model.isPaused ? "play.fill" : "pause.fill")
+                .frame(width: 16, height: 16)
+        }
+        .buttonStyle(.glass)
+        .disabled(model.phase == .stopping)
+        .help(model.isPaused ? "Resume recording" : "Pause recording")
+        .accessibilityLabel(model.isPaused ? "Resume" : "Pause")
+        .reportsButtonFrame("pause", to: model)
         Button(action: stop) {
             Label("Stop", systemImage: "stop.fill")
         }
@@ -178,13 +229,14 @@ struct RecordingActionStyle: ButtonStyle {
     }
 }
 
-/// The red border around the area while it records; clicks pass through it.
+/// The red border around the area while it records, orange while paused; clicks pass through it.
 struct RecordingBorderView: View {
     let size: CGSize
+    let model: RecordingControlsModel
 
     var body: some View {
         RoundedRectangle(cornerRadius: 4, style: .continuous)
-            .strokeBorder(Color.red, style: StrokeStyle(lineWidth: 2, dash: [6, 4]))
+            .strokeBorder(model.isPaused ? Color.orange : Color.red, style: StrokeStyle(lineWidth: 2, dash: [6, 4]))
             .frame(width: size.width + 8, height: size.height + 8)
     }
 }

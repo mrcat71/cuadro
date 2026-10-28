@@ -13,13 +13,13 @@ struct RecordingOptions {
     var systemAudio = false
     var microphone = false
 
-    /// The Settings > Capture choices, with the microphone of the Record Screen variant used.
-    static func current(microphone: Bool) -> RecordingOptions {
+    /// The Settings > Capture choices, with the sound switched for this recording.
+    static func current(microphone: Bool, systemAudio: Bool) -> RecordingOptions {
         let settings = AppSettings.shared
         return RecordingOptions(
             showsPointer: settings.recordPointer,
             highlightsClicks: settings.recordClicks,
-            systemAudio: settings.recordSystemAudio,
+            systemAudio: systemAudio,
             microphone: microphone
         )
     }
@@ -150,6 +150,15 @@ final class RecordingSession {
         })
     }
 
+    /// Leaves out what is captured from now until `resume`.
+    func pause() {
+        writer.pause(at: CMClockGetTime(CMClockGetHostTimeClock()))
+    }
+
+    func resume() {
+        writer.resume(at: CMClockGetTime(CMClockGetHostTimeClock()))
+    }
+
     /// Stops capturing and returns once the movie file is complete.
     func stop() async throws {
         let end = CMClockGetTime(CMClockGetHostTimeClock())
@@ -173,9 +182,10 @@ final class RecordingSession {
 }
 
 /// Crops each captured frame to the recorded area and writes it, with the audio, to an MP4. Only
-/// frames of the stream the area is on reach the movie. ScreenCaptureKit delivers samples on
-/// `queue`, where all writing happens; only the crop target arrives from the main actor, through
-/// a lock.
+/// frames of the stream the area is on reach the movie, and none captured during a pause: the
+/// movie's clock leaves pauses out, so what comes after one follows without a gap. ScreenCaptureKit
+/// delivers samples on `queue`, where all writing happens; only the crop target and the pauses
+/// arrive from the main actor, through locks.
 nonisolated final class RecordingWriter: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
     let queue = DispatchQueue(label: "io.github.mrcat71.cuadro.recording", qos: .userInitiated)
     var onFailure: (@MainActor (Error) -> Void)?
@@ -188,6 +198,8 @@ nonisolated final class RecordingWriter: NSObject, SCStreamOutput, SCStreamDeleg
     /// The stream whose frames the movie shows and where the crop should go in them.
     private let target = Mutex(Target(source: nil, crop: .zero))
     private let counts = Mutex((written: 0, dropped: 0))
+    /// On the host clock of the samples, in seconds.
+    private let pauses = Mutex(PauseTimeline())
 
     private nonisolated struct Target {
         var source: ObjectIdentifier?
@@ -205,6 +217,7 @@ nonisolated final class RecordingWriter: NSObject, SCStreamOutput, SCStreamDeleg
     /// The newest picture of each stream: cropped again while the area moves over a still screen,
     /// and shown at once when the area comes back to that stream's display.
     private var lastFrames: [ObjectIdentifier: CVPixelBuffer] = [:]
+    /// Movie times, which leave the pauses out.
     private var lastVideoTime = CMTime.invalid
     private var sessionStart = CMTime.invalid
     private var repeater: DispatchSourceTimer?
@@ -314,6 +327,33 @@ nonisolated final class RecordingWriter: NSObject, SCStreamOutput, SCStreamDeleg
         target.withLock { $0 = Target(source: source, crop: crop) }
     }
 
+    /// Drops what is captured from `time` (host clock) on, until `resume`.
+    func pause(at time: CMTime) {
+        pauses.withLock { $0.pause(at: time.seconds) }
+    }
+
+    func resume(at time: CMTime) {
+        pauses.withLock { $0.resume(at: time.seconds) }
+    }
+
+    /// Where a sample captured at `time` goes in the movie, or nil when a pause drops it.
+    private func movieTime(for time: CMTime) -> CMTime? {
+        let timeline = pauses.withLock { $0 }
+        guard let movie = timeline.movieTime(for: time.seconds) else { return nil }
+        return Self.shifted(time, back: time.seconds - movie)
+    }
+
+    /// Where the movie is at `time`; during a pause, where that pause began.
+    private func clampedMovieTime(for time: CMTime) -> CMTime {
+        let timeline = pauses.withLock { $0 }
+        return Self.shifted(time, back: time.seconds - timeline.clampedMovieTime(for: time.seconds))
+    }
+
+    private static func shifted(_ time: CMTime, back seconds: Double) -> CMTime {
+        guard seconds > 0 else { return time }
+        return time - CMTime(seconds: seconds, preferredTimescale: max(time.timescale, 1_000_000))
+    }
+
     /// Ends the recording early, as a stream that stops with an error does.
     func reportFailure(_ error: Error) {
         queue.async { [self] in fail(error) }
@@ -340,7 +380,8 @@ nonisolated final class RecordingWriter: NSObject, SCStreamOutput, SCStreamDeleg
                 for input in [video, microphone, systemAudio].compactMap({ $0 }) {
                     input.markAsFinished()
                 }
-                writer.endSession(atSourceTime: lastVideoTime.isValid ? max(end, lastVideoTime) : end)
+                let movieEnd = clampedMovieTime(for: end)
+                writer.endSession(atSourceTime: lastVideoTime.isValid ? max(movieEnd, lastVideoTime) : movieEnd)
                 writer.finishWriting { [self] in
                     if writer.status == .completed {
                         continuation.resume()
@@ -402,19 +443,22 @@ nonisolated final class RecordingWriter: NSObject, SCStreamOutput, SCStreamDeleg
             && appended?.source == source && appended?.crop == Self.crop(at: goal.crop.origin, size: goal.crop.size, in: picture)
         guard !settled else { return }
         let now = CMClockGetTime(CMClockGetHostTimeClock())
-        // A captured frame went out moments ago.
-        guard !lastVideoTime.isValid || (now - lastVideoTime).seconds >= 0.015 else { return }
+        // Paused, or a captured frame went out moments ago.
+        guard let movieNow = movieTime(for: now), !lastVideoTime.isValid || (movieNow - lastVideoTime).seconds >= 0.015 else { return }
         write(picture, from: source, at: now)
     }
 
-    /// Writes `picture` if it comes from the stream the movie shows.
+    /// Writes `picture`, captured at `time`, if it comes from the stream the movie shows and not
+    /// from a pause.
     private func write(_ picture: CVPixelBuffer, from source: ObjectIdentifier, at time: CMTime) {
         let goal = target.withLock { $0 }
-        guard !failed, writer.status == .writing, let transfer, goal.source == source else { return }
+        guard !failed, writer.status == .writing, let transfer, goal.source == source,
+              let movieTime = movieTime(for: time)
+        else { return }
         if !sessionStart.isValid {
-            writer.startSession(atSourceTime: time)
-            sessionStart = time
-        } else if lastVideoTime.isValid, time <= lastVideoTime {
+            writer.startSession(atSourceTime: movieTime)
+            sessionStart = movieTime
+        } else if lastVideoTime.isValid, movieTime <= lastVideoTime {
             return
         }
         advanceOrigin(to: goal.crop.origin, on: source, at: time)
@@ -443,11 +487,11 @@ nonisolated final class RecordingWriter: NSObject, SCStreamOutput, SCStreamDeleg
             fail(RecordingError.cannotWrite("pixel transfer \(status)"))
             return
         }
-        guard adaptor.append(output, withPresentationTime: time) else {
+        guard adaptor.append(output, withPresentationTime: movieTime) else {
             fail(writer.error ?? RecordingError.cannotWrite("video append"))
             return
         }
-        lastVideoTime = time
+        lastVideoTime = movieTime
         appended = (source, crop)
         counts.withLock { $0.written += 1 }
     }
@@ -479,14 +523,41 @@ nonisolated final class RecordingWriter: NSObject, SCStreamOutput, SCStreamDeleg
     }
 
     private func append(_ sampleBuffer: CMSampleBuffer, to input: AVAssetWriterInput?) {
+        let time = sampleBuffer.presentationTimeStamp
+        let duration = sampleBuffer.duration
         guard let input, !failed, writer.status == .writing, sessionStart.isValid,
               sampleBuffer.dataReadiness == .ready,
-              sampleBuffer.presentationTimeStamp >= sessionStart,
+              let movieTime = movieTime(for: time), movieTime >= sessionStart,
+              // Sound running into a pause would overlap the sound after it.
+              !duration.isValid || self.movieTime(for: time + duration) != nil,
               input.isReadyForMoreMediaData
         else { return }
-        if !input.append(sampleBuffer) {
+        var buffer = sampleBuffer
+        if movieTime != time {
+            guard let shifted = Self.retimed(sampleBuffer, back: time - movieTime) else {
+                fail(RecordingError.cannotWrite("audio timing"))
+                return
+            }
+            buffer = shifted
+        }
+        if !input.append(buffer) {
             fail(writer.error ?? RecordingError.cannotWrite("audio append"))
         }
+    }
+
+    /// A copy of `buffer` with its samples' times earlier by `shift`.
+    private static func retimed(_ buffer: CMSampleBuffer, back shift: CMTime) -> CMSampleBuffer? {
+        var count: CMItemCount = 0
+        guard CMSampleBufferGetSampleTimingInfoArray(buffer, entryCount: 0, arrayToFill: nil, entriesNeededOut: &count) == noErr, count > 0 else { return nil }
+        var timings = [CMSampleTimingInfo](repeating: CMSampleTimingInfo(), count: count)
+        guard CMSampleBufferGetSampleTimingInfoArray(buffer, entryCount: count, arrayToFill: &timings, entriesNeededOut: &count) == noErr else { return nil }
+        for index in timings.indices {
+            if timings[index].presentationTimeStamp.isValid { timings[index].presentationTimeStamp = timings[index].presentationTimeStamp - shift }
+            if timings[index].decodeTimeStamp.isValid { timings[index].decodeTimeStamp = timings[index].decodeTimeStamp - shift }
+        }
+        var copy: CMSampleBuffer?
+        guard CMSampleBufferCreateCopyWithNewTiming(allocator: nil, sampleBuffer: buffer, sampleTimingEntryCount: count, sampleTimingArray: &timings, sampleBufferOut: &copy) == noErr else { return nil }
+        return copy
     }
 
     private func fail(_ error: Error) {

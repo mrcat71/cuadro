@@ -86,39 +86,56 @@ enum UISnapshotRunner {
         try await recordEditorWindow(windows, into: directory)
     }
 
-    /// The recording frame being adjusted on the main screen, and the controls of a recording in
-    /// progress around a second area. Nothing is recorded.
+    /// The recording frame being adjusted on the main screen, with a camera bubble that shows a
+    /// placeholder, and the controls of a recording in progress around a second area. Nothing is
+    /// recorded, and the camera stays off.
     private static func showRecordingChrome() -> [ScreenRecordingController] {
         guard let screen = NSScreen.main, let displayID = screen.displayID else { return [] }
         let display = RecordingDisplay(displayID: displayID, frame: screen.frame, scale: screen.backingScaleFactor)
-        let adjusting = ScreenRecordingController(display: display, area: CGRect(x: 120, y: 160, width: 640, height: 360), microphone: true, returnFocus: {}) {}
+        let adjusting = ScreenRecordingController(display: display, area: CGRect(x: 120, y: 160, width: 640, height: 360), microphone: true, camera: false, returnFocus: {}) {}
         adjusting.begin()
-        let recording = ScreenRecordingController(display: display, area: CGRect(x: 840, y: 160, width: 480, height: 300), microphone: true, returnFocus: {}) {}
+        adjusting.debugShowCameraPlaceholder()
+        let recording = ScreenRecordingController(display: display, area: CGRect(x: 840, y: 160, width: 480, height: 300), microphone: true, camera: false, returnFocus: {}) {}
         recording.debugShowRecordingControls()
         return [adjusting, recording]
     }
 
-    /// The recording controls must stay above the dimmed screen of the adjust stage, or it takes
-    /// their clicks. That happened once, when every FloatingPanel fell back to `.floating`.
+    /// The recording controls and the camera bubble must stay above the dimmed screen of the
+    /// adjust stage, or it takes their clicks. That happened once, when every FloatingPanel fell
+    /// back to `.floating`.
     private static func checkRecordingControlsLevel() throws {
         guard let shield = NSApp.windows.first(where: { $0 is RecordingShieldWindow }) else { return }
-        for controls in NSApp.windows where controls is RecordingControlsPanel && controls.level <= shield.level {
-            throw SnapshotCheckFailure(description: "recording controls at window level \(controls.level.rawValue), not above the dimmed screen at \(shield.level.rawValue)")
+        for controls in NSApp.windows where (controls is RecordingControlsPanel || controls is CameraBubblePanel) && controls.level <= shield.level {
+            throw SnapshotCheckFailure(description: "\(type(of: controls)) at window level \(controls.level.rawValue), not above the dimmed screen at \(shield.level.rawValue)")
         }
     }
 
     /// Records about two seconds through the RecordingSession that Record Screen uses: whole
-    /// display frames showing only the editor window, cropped to part of it that pans across it
-    /// the way dragging the recording controls does, with system audio, while switching tools so
-    /// frames keep coming. Reads the movie back and saves its first and last frames.
+    /// display frames showing only the editor window and a camera bubble on it, cropped to part of
+    /// the window that pans across it the way dragging the recording controls does, with system
+    /// audio, while switching tools so frames keep coming. Pauses for 0.6 s halfway. Reads the
+    /// movie back, saves its first and last frames and says whether the bubble is in them.
     private static func recordEditorWindow(_ windows: [SCWindow], into directory: URL) async throws {
-        guard let window = windows.first(where: { $0.title == "UI Snapshot" }),
-              let model = (NSApp.windows.compactMap { $0.windowController as? EditorWindowController }.first?.model)
+        guard let editorWindow = windows.first(where: { $0.title == "UI Snapshot" }),
+              let editorController = (NSApp.windows.compactMap { $0.windowController as? EditorWindowController }.first),
+              let editorScreen = editorController.window?.screen, let editorDisplayID = editorScreen.displayID,
+              let editorFrame = editorController.window?.frame
         else { return }
-        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-        guard let display = content.displays.first(where: { $0.frame.intersects(window.frame) }) else { return }
-        // Nothing but the editor window, so nothing else on the screen ends up in the movie.
-        let filter = SCContentFilter(display: display, including: [window])
+        let model = editorController.model
+        // A bubble in the middle of the window, where every crop of the pan includes it.
+        let bubbleDisplay = RecordingDisplay(displayID: editorDisplayID, frame: editorScreen.frame, scale: editorScreen.backingScaleFactor)
+        let bubble = CameraBubble(mirrored: false, placeholder: true)
+        bubble.place(in: ScreenCoordinates.localTopLeft(fromCocoa: editorFrame, screenFrame: editorScreen.frame), on: bubbleDisplay, anchor: CGPoint(x: 0.5, y: 0.5))
+        defer { bubble.remove() }
+        let content = try await ScreenCaptureService.shared.shareableContent(listing: [bubble.panel])
+        guard let window = content.windows.first(where: { $0.windowID == editorWindow.windowID }),
+              let display = content.displays.first(where: { $0.frame.intersects(window.frame) })
+        else { return }
+        let bubbleWindows = content.windows.filter { $0.windowID == CGWindowID(bubble.panel.windowNumber) }
+        // Every app left out, Cuadro's too, but for the editor window and the bubble, so nothing
+        // else on the screen ends up in the movie. The bubble gets in the way Record Screen lets
+        // it in: as an exception to its app being left out.
+        let filter = SCContentFilter(display: display, excludingApplications: content.applications, exceptingWindows: [window] + bubbleWindows)
         let scale = CGFloat(filter.pointPixelScale)
         let frame = CGSize(width: CGFloat(display.width) * scale, height: CGFloat(display.height) * scale)
         // Both frames are global, y down.
@@ -133,15 +150,26 @@ enum UISnapshotRunner {
         let options = RecordingOptions(showsPointer: false, highlightsClicks: false, systemAudio: true)
         let session = try RecordingSession(source: RecordingSource(displayID: display.displayID, filter: filter, frameSize: frame), crop: CGRect(origin: first, size: crop), options: options, outputURL: url)
         try await session.start()
+        let started = ContinuousClock.now
+        let pause = Duration.milliseconds(600)
         for (step, tool) in [EditorTool.ellipse, .text, .arrow, .rectangle].enumerated() {
             try await Task.sleep(for: .milliseconds(500))
             model.tool = tool
             let progress = CGFloat(step + 1) / 4
             session.move(cropOrigin: CGPoint(x: first.x + (last.x - first.x) * progress, y: first.y + (last.y - first.y) * progress))
+            if step == 1 {
+                // Frames keep coming while paused, and none of them may reach the movie.
+                session.pause()
+                try await Task.sleep(for: pause / 2)
+                model.tool = .pen
+                try await Task.sleep(for: pause / 2)
+                session.resume()
+            }
         }
         // Lets the last pan settle.
         try await Task.sleep(for: .milliseconds(400))
         try await session.stop()
+        let wall = (ContinuousClock.now - started).milliseconds / 1000
         let asset = AVURLAsset(url: url)
         let duration = try await asset.load(.duration).seconds
         let video = try await asset.loadTracks(withMediaType: .video)
@@ -149,18 +177,36 @@ enum UISnapshotRunner {
         let size = try await video.first?.load(.naturalSize) ?? .zero
         let audioSeconds = try await audio.first?.load(.timeRange).duration.seconds ?? 0
         let frames = session.frameCounts
-        print("wrote \(url.path) (recording, \(String(format: "%.1f", duration)) s, \(Int(size.width))x\(Int(size.height)) px from \(Int(frame.width))x\(Int(frame.height)) frames, \(frames.written) frames, \(frames.dropped) dropped, \(video.count) video and \(audio.count) audio tracks, audio \(String(format: "%.1f", audioSeconds)) s)")
+        print("wrote \(url.path) (recording, \(String(format: "%.1f", duration)) s of \(String(format: "%.1f", wall)) s with a \(String(format: "%.1f", pause.milliseconds / 1000)) s pause, \(Int(size.width))x\(Int(size.height)) px from \(Int(frame.width))x\(Int(frame.height)) frames, \(frames.written) frames, \(frames.dropped) dropped, \(video.count) video and \(audio.count) audio tracks, audio \(String(format: "%.1f", audioSeconds)) s)")
         let generator = AVAssetImageGenerator(asset: asset)
         generator.requestedTimeToleranceBefore = .zero
         generator.requestedTimeToleranceAfter = .zero
-        for (name, seconds) in [("recording-first", 0.0), ("recording-last", max(0, duration - 0.05))] {
+        // The bubble's center in frame pixels, y down, and where the first and last crops start.
+        let bubbleCenter = ScreenCoordinates.localTopLeft(fromCocoa: bubble.panel.frame, screenFrame: editorScreen.frame)
+        let center = CGPoint(x: bubbleCenter.midX * scale, y: bubbleCenter.midY * scale)
+        for (name, seconds, origin) in [("recording-first", 0.0, first), ("recording-last", max(0, duration - 0.05), last)] {
             let image = try await generator.image(at: CMTime(seconds: seconds, preferredTimescale: 600)).image
+            let bubbleShown = bubbleWindows.isEmpty ? "not listed" : showsBubble(image, at: CGPoint(x: center.x - origin.x, y: center.y - origin.y), radius: bubbleCenter.width / 2 * scale) ? "yes" : "no"
             if let data = ImageExporter.encodePNG(image, scale: scale) {
                 let frameURL = directory.appendingPathComponent("\(name).png")
                 try data.write(to: frameURL)
-                print("wrote \(frameURL.path) (movie frame at \(String(format: "%.2f", seconds)) s)")
+                print("wrote \(frameURL.path) (movie frame at \(String(format: "%.2f", seconds)) s, camera bubble: \(bubbleShown))")
             }
         }
+    }
+
+    /// The placeholder bubble's dark gray between its person symbol and its ring, at the lower
+    /// right of `center` in `image` (pixels, y down).
+    private static func showsBubble(_ image: CGImage, at center: CGPoint, radius: CGFloat) -> Bool {
+        let point = CGPoint(x: center.x + radius * 0.55, y: center.y + radius * 0.55)
+        guard point.x >= 0, point.y >= 0, Int(point.x) < image.width, Int(point.y) < image.height,
+              let context = CGContext(data: nil, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4, space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return false }
+        // Draws the image so that `point` lands on the single pixel; CoreGraphics is y up.
+        context.draw(image, in: CGRect(x: -point.x.rounded(.down), y: point.y.rounded(.down) - CGFloat(image.height) + 1, width: CGFloat(image.width), height: CGFloat(image.height)))
+        guard let data = context.data?.assumingMemoryBound(to: UInt8.self) else { return false }
+        // NSColor(white: 0.2) in sRGB, give or take the video encoding.
+        return (0..<3).allSatisfy { abs(Int(data[$0]) - 51) <= 14 }
     }
 
     /// Renders a window's content layer tree into an image.
