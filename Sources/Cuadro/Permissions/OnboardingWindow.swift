@@ -168,8 +168,17 @@ struct OnboardingView: View {
 /// Live state of each permission Cuadro uses, with a button for each missing one.
 struct PermissionList: View {
     let status: PermissionStatus
+    var usesGlass = true
 
     var body: some View {
+        if usesGlass {
+            rows.glassEffect(.regular, in: .rect(cornerRadius: 18))
+        } else {
+            rows
+        }
+    }
+
+    private var rows: some View {
         VStack(spacing: 0) {
             PermissionRow(title: "Screen Recording", detail: "Required for every capture.", state: status.screenRecording) {
                 PermissionCenter.shared.allowScreenRecording()
@@ -184,7 +193,6 @@ struct PermissionList: View {
                 PermissionCenter.shared.allowAccessibility()
             }
         }
-        .glassEffect(.regular, in: .rect(cornerRadius: 18))
     }
 }
 

@@ -68,7 +68,9 @@ After an update of an ad-hoc signed copy, and once more after the update that br
 
 ## Updates
 
-Cuadro checks `appcast.xml` on the latest GitHub release (`SUFeedURL` in `Resources/Info.plist`) once a day and on **Check for Updates…**. Sparkle downloads the zip, rejects it unless its EdDSA signature matches `SUPublicEDKey` (checked before extraction), replaces the app and relaunches it. Updates installed this way are not quarantined, so they need no Open Anyway. Whether permissions survive an update depends on the signature (see [Signing](#signing)).
+Cuadro checks `appcast.xml` on the latest GitHub release (`SUFeedURL` in `Resources/Info.plist`) once a day and on **Check for Updates…**. Checks open **Settings > General**, where the update card shows release notes, download progress, errors with retry, and the choice to update, defer or skip a version. Scheduled checks do not take focus: a Dock badge announces an available update. **Check for updates automatically** controls daily checks; **Install updates automatically** optionally downloads updates in the background and installs them when Cuadro quits. Both use native checkboxes. Save open edits before choosing **Relaunch to Update**.
+
+Sparkle still downloads the zip, rejects it unless its EdDSA signature matches `SUPublicEDKey` (checked before extraction), replaces the app and relaunches it; only its stock windows are replaced. Updates installed this way are not quarantined, so they need no Open Anyway. Whether permissions survive an update depends on the signature (see [Signing](#signing)).
 
 The feed and the downloads must be public, so in-app updates work once the repository is public. 0.1.1 is the first version with Sparkle: a copy of 0.1.0 has to be replaced by hand once.
 
@@ -120,6 +122,8 @@ While recording, a red border marks the area and the bar shows the timer, **Paus
 
 ## Settings and files
 
+Settings retain the native toolbar tabs, with flat rounded groups and aligned controls in every pane. Long panes scroll inside a fixed-size window; no custom category switcher or switch-style toggles are used.
+
 - Screenshots folder: `~/Pictures/Screenshots` by default; file names come from a template such as `Screenshot {date} at {time}` (tokens are listed in Settings > Output).
 - Recent captures: `~/Library/Application Support/Cuadro/History` (30 by default, configurable or off in Settings > General).
 - Menu bar icon: Settings > General hides it, and macOS can hide it too (System Settings > Menu Bar, or a crowded menu bar). To get back to Settings, open Cuadro again from Finder or Spotlight, or choose **Settings…** in the editor's ⋯ menu. Without the icon, captures start from their shortcuts.
@@ -136,7 +140,7 @@ While recording, a red border marks the area and the bar shows the timer, **Paus
 
 Inside the app:
 
-- `App/`: lifecycle, menus, `DockPresence` and `Updater` (Sparkle, with gentle reminders for a menu bar app).
+- `App/`: lifecycle, menus, `DockPresence`, `Updater` and `UpdateDriver` (Sparkle with an inline settings UI and quiet scheduled reminders).
 - `Capture/`: `ScreenCaptureService` (ScreenCaptureKit display and window screenshots), `CaptureCoordinator` (every mode and the post-capture pipeline), `Overlay/` (frozen-screen selection, picker and ruler, and `CaptureCurtain`, which dims the screen the moment a selection starts while the frozen screenshots are still being taken. The screenshots wait the few frames until the window server lists the curtain, since a display filter can leave out only listed windows, and the curtain lifts after two seconds if ScreenCaptureKit stalls), `Scrolling/` (SCStream plus stitching off the main actor), `Recording/` (the adjust stage and the recording controls; an SCStream of each whole display the area has been on, whose frames `RecordingWriter` crops to the area, scaled to the movie's size, and writes to MP4 with AVAssetWriter. Only the first stream records sound, and the others keep running so the area can return at once. `SCRecordingOutput` would be simpler, but it ends its movie on any change to the stream configuration, so it cannot follow a moving area. Each stream's filter leaves Cuadro out except the `CameraBubble` panel, an AVCaptureVideoPreviewLayer in a circle, through `exceptingWindows`; the stream starts once the window server lists the panel. A pause drops what is captured during it and moves later samples back by it, audio buffers retimed).
 - `Editor/`: `EditorModel` (document state as a value, undo snapshots), `Canvas/` (NSScrollView canvas drawing through `DocumentRenderer`, so the canvas and the export match), `Chrome/` (floating Liquid Glass palettes).
 - `Hotkeys/` (Carbon `RegisterEventHotKey`, no Accessibility needed), `Permissions/`, `Output/`, `Pin/`, `QuickAccess/`, `OCR/` (Vision), `Settings/`, `HUD/`.
@@ -179,12 +183,14 @@ Renovate keeps the pinned action SHAs, Sparkle (`exact:` in `Package.swift`) and
 
 ```sh
 swift build                 # debug build, should report no warnings
-swift test                  # CuadroKit unit tests
+swift test                  # CuadroKit logic and app updater callback tests
 make app && codesign --verify --deep --strict build/Cuadro.app
 make dist appcast           # dmg, zip and a feed signed with the keychain key
 ```
 
 Logs: `/usr/bin/log show --last 10m --predicate 'subsystem == "io.github.mrcat71.cuadro"'`. Use the full path in zsh, where `log` is a shell builtin. Each selection logs `Overlay ready in … ms` with the time its screenshots took, and each full-screen capture `Full screen captured in … ms`. A curtain that had to lift logs `No screenshots after 2000 ms`.
+
+Settings-only UI check: `.build/debug/Cuadro --settings-snapshot /tmp/cuadro-settings` renders every settings pane and update state in light and dark appearances, writes PNGs and quits. It does not start Sparkle, register shortcuts or capture the screen. Synthetic update offers do not download or install anything.
 
 UI self-check: `build/Cuadro.app/Contents/MacOS/Cuadro --ui-snapshot /tmp/cuadro-ui` opens the editor, settings, onboarding, a pin, a toast, a thumbnail, a recording frame being adjusted (which dims the main screen for about two seconds) with a camera bubble that shows a person symbol (the camera stays off), the controls of a recording and the selection overlay with a synthetic screenshot, writes a PNG per window, prints the editor's zoom (100% unless the screen is too small for the 800 × 500 pt sample) and quits. With Screen Recording allowed it captures the real windows and also records about two seconds through the Record Screen pipeline: whole-display frames that show only its editor window and such a bubble on it, let in the way Record Screen lets its bubble in, with the crop panning across the window as if the controls were dragged and a 0.6 s pause halfway. It writes `recording.mp4`, prints its length next to the time it took, which should be the pause longer, its size and frame counts, and saves its first and last frames as `recording-first.png` and `recording-last.png`, which should show opposite corners of the editor with the bubble in the middle; the line for each says `camera bubble: yes` when it found the bubble. Without Screen Recording it renders the layer trees in-process, where Liquid Glass surfaces appear flat, and skips the recording. Either way it stops without writing any image when the recording controls or the camera bubble are not above the dimmed screen, which would take their clicks; the release smoke test then fails. The README pictures in `docs/images` come from this run.
 
@@ -208,6 +214,7 @@ Run these after changes to capture or the editor; they need a real screen and in
 - [ ] Every editor tool: draw, select, move, resize, change style, undo and redo; text editing; crop with auto-trim; backdrop. Step counter: the pointer tip lands on the click and the badge beside it, inside the image near its edges.
 - [ ] Copy, save, Save As in each format, drag out to Finder, share, pin, print.
 - [ ] Settings: record and clear a shortcut, and Restore Defaults (⇧⌘1 Record Screen, ⇧⌘2 Capture Area); the Camera section's camera and mirroring reach the next recording; hide the menu bar icon, then get back to Settings by opening the app again and with **Settings…** in the editor's ⋯ menu; Launch at login from `~/Applications`.
+- [ ] Updates in a packaged app: both menu commands open General; cancel a check, show an available update and its notes, defer or skip it, and retry a network failure. Confirm automatic-check/install choices persist. A scheduled offer badges the Dock without interrupting a capture. With edits saved, update and relaunch from the card.
 
 ## Not included
 

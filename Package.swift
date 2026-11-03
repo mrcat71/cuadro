@@ -25,5 +25,6 @@ let package = Package(
         // Renders the app icon PNG set; the Makefile turns it into AppIcon.icns.
         .executableTarget(name: "cuadro-icon"),
         .testTarget(name: "CuadroKitTests", dependencies: ["CuadroKit"]),
+        .testTarget(name: "CuadroAppTests", dependencies: ["Cuadro"]),
     ]
 )

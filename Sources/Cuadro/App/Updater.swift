@@ -1,52 +1,68 @@
 import AppKit
+import Observation
 @preconcurrency import Sparkle
 
-/// In-app updates through Sparkle. The feed is the `appcast.xml` asset of the latest GitHub
-/// release (`SUFeedURL` in Info.plist), and every archive is checked against `SUPublicEDKey`.
-final class Updater: NSObject, @preconcurrency SPUStandardUserDriverDelegate {
+/// Sparkle owns checking, verification and installation; Cuadro owns its UI.
+@Observable
+final class Updater {
     static let shared = Updater()
 
-    private var controller: SPUStandardUpdaterController?
-
-    /// Starts scheduled checks. Builds without a feed URL (`swift run`, UI snapshots) skip it.
-    func start() {
-        guard controller == nil, Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") != nil else { return }
-        controller = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: self)
-    }
-
-    var isAvailable: Bool { controller != nil }
-
-    /// False while a check or an install is already running.
-    var canCheckForUpdates: Bool { controller?.updater.canCheckForUpdates ?? false }
-
-    var checksAutomatically: Bool {
-        get { controller?.updater.automaticallyChecksForUpdates ?? false }
-        set { controller?.updater.automaticallyChecksForUpdates = newValue }
-    }
-
-    func checkForUpdates() {
-        controller?.checkForUpdates(nil)
-    }
-
-    // MARK: Gentle reminders
-    // A menu bar app has no Dock icon to show behind, so Sparkle asks for these: put Cuadro in the
-    // Dock while an update is on screen, badge it for updates found in the background.
-
-    var supportsGentleScheduledUpdateReminders: Bool { true }
-
-    func standardUserDriverWillHandleShowingUpdate(_ handleShowingUpdate: Bool, forUpdate update: SUAppcastItem, state: SPUUserUpdateState) {
-        DockPresence.shared.isShowingUpdate = true
-        if !state.userInitiated {
-            NSApp.dockTile.badgeLabel = "1"
+    private(set) var isAvailable = false
+    private(set) var canCheckForUpdates = false
+    private(set) var unavailableReason = "Updates are available in the packaged Cuadro.app."
+    var checksAutomatically = false {
+        didSet {
+            if updater?.automaticallyChecksForUpdates != checksAutomatically {
+                updater?.automaticallyChecksForUpdates = checksAutomatically
+            }
         }
     }
 
-    func standardUserDriverDidReceiveUserAttention(forUpdate update: SUAppcastItem) {
-        NSApp.dockTile.badgeLabel = ""
+    var installsAutomatically = false {
+        didSet {
+            if updater?.automaticallyDownloadsUpdates != installsAutomatically {
+                updater?.automaticallyDownloadsUpdates = installsAutomatically
+            }
+        }
     }
 
-    func standardUserDriverWillFinishUpdateSession() {
-        NSApp.dockTile.badgeLabel = ""
-        DockPresence.shared.isShowingUpdate = false
+    @ObservationIgnored private var updater: SPUUpdater?
+    @ObservationIgnored private var observations: [NSKeyValueObservation] = []
+    let driver = UpdateDriver()
+
+    static var version: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
+    }
+
+    func start() {
+        guard updater == nil, Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") != nil else { return }
+        let updater = SPUUpdater(hostBundle: .main, applicationBundle: .main, userDriver: driver, delegate: nil)
+        do {
+            try updater.start()
+        } catch {
+            let reason = "Updates could not start: \(error.localizedDescription)"
+            unavailableReason = reason
+            Log.app.error("\(reason, privacy: .public)")
+            return
+        }
+        self.updater = updater
+        isAvailable = true
+        driver.checkAgain = { [weak self] in self?.checkForUpdates() }
+        observations = [
+            updater.observe(\.canCheckForUpdates, options: [.initial, .new]) { [weak self] updater, _ in
+                MainActor.assumeIsolated { self?.canCheckForUpdates = updater.canCheckForUpdates }
+            },
+            updater.observe(\.automaticallyChecksForUpdates, options: [.initial, .new]) { [weak self] updater, _ in
+                MainActor.assumeIsolated { self?.checksAutomatically = updater.automaticallyChecksForUpdates }
+            },
+            updater.observe(\.automaticallyDownloadsUpdates, options: [.initial, .new]) { [weak self] updater, _ in
+                MainActor.assumeIsolated { self?.installsAutomatically = updater.automaticallyDownloadsUpdates }
+            },
+        ]
+    }
+
+    func checkForUpdates() {
+        driver.showUpdateInFocus()
+        updater?.checkForUpdates()
     }
 }

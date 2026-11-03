@@ -4,6 +4,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var statusItem: StatusItemController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        let arguments = CommandLine.arguments
+        if let index = arguments.firstIndex(of: "--settings-snapshot"), arguments.indices.contains(index + 1) {
+            SettingsSnapshotRunner.run(outputDirectory: URL(fileURLWithPath: arguments[index + 1], isDirectory: true))
+            return
+        }
         // Record the launch-time Screen Recording state before anything else asks for it.
         let permissions = PermissionCenter.shared
         NSApp.mainMenu = AppMenu.build()
@@ -13,7 +18,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
         HotKeyCenter.shared.apply(AppSettings.shared.shortcuts)
 
-        let arguments = CommandLine.arguments
         if let index = arguments.firstIndex(of: "--ui-snapshot"), arguments.indices.contains(index + 1) {
             UISnapshotRunner.run(outputDirectory: URL(fileURLWithPath: arguments[index + 1], isDirectory: true))
             return
@@ -31,7 +35,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        if !flag {
+        if Updater.shared.driver.phase != nil {
+            Updater.shared.driver.showUpdateInFocus()
+        } else if !flag {
             SettingsWindowController.shared.show()
         }
         return true

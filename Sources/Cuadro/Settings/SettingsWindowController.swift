@@ -5,9 +5,11 @@ import SwiftUI
 /// Native toolbar-style Settings window hosting SwiftUI panes.
 final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     static let shared = SettingsWindowController()
+    private let tabs: NSTabViewController
 
     private init() {
         let tabs = NSTabViewController()
+        self.tabs = tabs
         tabs.tabStyle = .toolbar
         tabs.transitionOptions = [.crossfade, .allowUserInteraction]
         Self.add(to: tabs, "General", "gearshape", GeneralSettingsPane())
@@ -26,9 +28,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
 
     @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+    required init?(coder _: NSCoder) {
+        fatalError("init(coder:) is not supported")
+    }
 
-    private static func add<Content: View>(to tabs: NSTabViewController, _ title: String, _ symbol: String, _ view: Content) {
+    private static func add(to tabs: NSTabViewController, _ title: String, _ symbol: String, _ view: some View) {
         let controller = NSHostingController(rootView: view)
         controller.sizingOptions = [.preferredContentSize]
         controller.title = title
@@ -43,6 +47,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         DockPresence.shared.track(window)
         NSApp.activate()
         window.makeKeyAndOrderFront(nil)
+    }
+
+    func showGeneral() {
+        tabs.selectedTabViewItemIndex = 0
+        show()
+        Updater.shared.driver.receivedAttention()
     }
 }
 
