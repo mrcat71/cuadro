@@ -202,6 +202,7 @@ Run these after changes to capture or the editor; they need a real screen and in
 - [ ] ⇧⌘2: drag an area, the editor opens and the image is on the clipboard; Esc cancels and focus returns to the previous app.
 - [ ] A capture smaller than the screen opens at 100% and stays fitted while the window is resized, until you zoom.
 - [ ] Area mode: Space toggles window mode; clicking a window captures it with a shadow and transparent corners.
+- [ ] Window mode on a sheet or dialog in front of its window (System Settings > General > Storage, the (i) next to macOS): the capture holds only the dialog, with and without the shadow, not the window behind it.
 - [ ] Capture Full Screen captures the display under the pointer; Repeat Last Area reproduces the previous rectangle.
 - [ ] Multiple displays (and a non-Retina display if available): overlay on every screen, correct crop and scale.
 - [ ] Delayed capture of an open menu.

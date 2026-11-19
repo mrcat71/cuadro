@@ -103,11 +103,19 @@ final class ScreenCaptureService {
             throw CaptureError.windowNotFound
         }
         let filter = SCContentFilter(desktopIndependentWindow: window)
+        let pid = window.owningApplication?.processID
+        let sameAppFrames = content.windows.filter {
+            $0.windowID != windowID && $0.isOnScreen && $0.windowLayer == window.windowLayer
+                && pid != nil && $0.owningApplication?.processID == pid
+        }.map(\.frame)
+        if WindowCapture.needsIsolation(frame: window.frame, filterSize: filter.contentRect.size, sameAppFrames: sameAppFrames) {
+            return try await captureAttachedWindow(window, content: content, includeShadow: includeShadow)
+        }
         let scale = CGFloat(filter.pointPixelScale)
         // contentRect excludes the shadow and there is no API for the shadow's frame (Apple
         // forums thread 765360). Capture into an oversized surface without upscaling, then trim
         // the transparent margin.
-        let margin: CGFloat = includeShadow ? 120 : 0
+        let margin: CGFloat = includeShadow ? Self.shadowMargin : 0
         let configuration = SCStreamConfiguration()
         configuration.width = Int(((filter.contentRect.width + margin * 2) * scale).rounded())
         configuration.height = Int(((filter.contentRect.height + margin * 2) * scale).rounded())
@@ -122,13 +130,51 @@ final class ScreenCaptureService {
         }
         let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
         guard includeShadow else { return (image, scale) }
-        let trimmed = await Task.detached(priority: .userInitiated) { () -> CGImage in
+        return (await Self.trimmingTransparentMargin(image), scale)
+    }
+
+    /// Room around a window for its shadow, in points.
+    private static let shadowMargin: CGFloat = 120
+
+    /// Captures a window attached to another one, such as a sheet, without that parent: a display
+    /// filter that lets in only this window, cropped to it. Unlike the single-window filter it
+    /// leaves out the window's own child windows and the parts that are off the display.
+    private func captureAttachedWindow(_ window: SCWindow, content: SCShareableContent, includeShadow: Bool) async throws -> (image: CGImage, scale: CGFloat) {
+        guard let index = WindowCapture.display(for: window.frame, among: content.displays.map(\.frame)) else {
+            throw CaptureError.windowNotFound
+        }
+        let display = content.displays[index]
+        let margin: CGFloat = includeShadow ? Self.shadowMargin : 0
+        guard let source = WindowCapture.sourceRect(frame: window.frame, margin: margin, displayBounds: display.frame) else {
+            throw CaptureError.windowNotFound
+        }
+        let filter = SCContentFilter(display: display, including: [window])
+        let scale = CGFloat(filter.pointPixelScale)
+        let configuration = SCStreamConfiguration()
+        configuration.sourceRect = source
+        configuration.width = Int((source.width * scale).rounded())
+        configuration.height = Int((source.height * scale).rounded())
+        configuration.backgroundColor = .clear
+        configuration.shouldBeOpaque = false
+        configuration.ignoreShadowsDisplay = !includeShadow
+        configuration.showsCursor = false
+        configuration.captureResolution = .best
+        if AppSettings.shared.convertToSRGB {
+            configuration.colorSpaceName = CGColorSpace.sRGB
+        }
+        let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
+        guard includeShadow else { return (image, scale) }
+        return (await Self.trimmingTransparentMargin(image), scale)
+    }
+
+    /// The image cut down to its visible pixels, off the main actor.
+    private static func trimmingTransparentMargin(_ image: CGImage) async -> CGImage {
+        await Task.detached(priority: .userInitiated) { () -> CGImage in
             guard let bounds = PixelBuffer(image: image)?.visibleBounds(),
                   let cropped = image.cropping(to: bounds.cgRect)
             else { return image }
             return cropped
         }.value
-        return (trimmed, scale)
     }
 }
 
