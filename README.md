@@ -158,7 +158,7 @@ git push origin v0.1.1
 
 Versions must look like `1.2.3`, or `1.2.3-beta.1` for a pre-release. Releases run one at a time, so a bump and a tag pushed for it publish once; the second run fails on the existing release. Running the workflow by hand (Actions > release > Run workflow) builds the same files without publishing and attaches them to the run. `make app dist VERSION=1.2.3` produces them locally in `build/dist`.
 
-The build runs on GitHub's hosted `xcode-27` macOS image because the self-hosted runners are Linux only, after a short `ubuntu-24.04` job that decides whether there is a version to release. While the repository is private, those minutes count against the account's Actions quota.
+Only the build job runs on macOS (GitHub's hosted `xcode-27` image): tests, release build, signing, notarization, smoke test, disk image and update feed all need it. Everything else runs on hosted `ubuntu-26.04`: deciding whether there is a version to release and rejecting one that already has a release, generating the release notes, and publishing the GitHub Release from the files the build job uploads, after checking them against `SHA256SUMS`. While the repository is private, those minutes count against the account's Actions quota, macOS minutes at a much higher rate.
 
 Publishing requires the `SPARKLE_PRIVATE_KEY` secret (see [Updates](#updates)); a manual run without it skips the feed. Signing depends on which of the other secrets exist:
 

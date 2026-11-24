@@ -55,8 +55,9 @@ defaults:
 jobs:
   version:
     name: version
-    # Reads Info.plist and the tags only. GitHub-hosted: the repository has no
-    # self-hosted runners, and hosted ones cost nothing on a public repository.
+    # Reads Info.plist, the tags and the releases only. Every job that does not
+    # need macOS runs on Linux: GitHub-hosted, since the repository has no
+    # self-hosted runners, and macOS minutes cost many times more.
     runs-on: ubuntu-26.04
     timeout-minutes: 5
     outputs:
@@ -115,18 +116,60 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "Version: $version (prerelease: $prerelease, build: $build, publish: $publish)"
 
-  release:
-    name: build + publish
+      # Fails before any macOS time is spent on a release that cannot publish.
+      - name: Reject duplicate release
+        if: steps.version.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::release $TAG already exists"
+            exit 1
+          fi
+
+  notes:
+    name: release notes
     needs: version
-    if: needs.version.outputs.build == 'true'
-    # GitHub-hosted on purpose: the self-hosted runners are Linux-only, and this
-    # needs macOS with Xcode. Same Xcode build (27.0, 27A266a) as local
-    # development. xcode-27 is a GitHub public preview label; move to macos-27
-    # once it is generally available.
+    if: needs.version.outputs.publish == 'true'
+    # The same notes go to the GitHub Release and into the update window, so
+    # they exist before the build signs the feed. A version bump on main has no
+    # tag yet: the notes run up to its commit.
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    permissions:
+      contents: write  # the generate-notes endpoint needs it; it writes nothing
+    outputs:
+      notes: ${{ steps.notes.outputs.notes }}
+    steps:
+      - name: Generate release notes
+        id: notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.version.outputs.tag }}
+        run: |
+          notes="$(gh api "repos/$GITHUB_REPOSITORY/releases/generate-notes" -f tag_name="$TAG" -f target_commitish="$GITHUB_SHA" --jq .body)"
+          delimiter="notes_$(uuidgen)"
+          {
+            echo "notes<<$delimiter"
+            printf '%s\n' "$notes"
+            echo "$delimiter"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    name: build
+    needs: [version, notes]
+    # notes is skipped unless publishing; !cancelled() keeps that from
+    # skipping the build too.
+    if: ${{ !cancelled() && needs.version.outputs.build == 'true' && needs.notes.result != 'failure' }}
+    # The only macOS job: tests, build, signing, notarization, smoke test, disk
+    # image and the Sparkle feed all need macOS with Xcode. Same Xcode build
+    # (27.0, 27A266a) as local development. xcode-27 is a GitHub public preview
+    # label; move to macos-27 once it is generally available.
     runs-on: xcode-27
     timeout-minutes: 30
     permissions:
-      contents: write  # create the GitHub Release and its tag
+      contents: read
     env:
       DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
       HAS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE_P12 != '' }}
@@ -142,17 +185,6 @@ jobs:
         run: |
           xcodebuild -version
           swift --version
-
-      - name: Reject duplicate release
-        if: needs.version.outputs.publish == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ needs.version.outputs.tag }}
-        run: |
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "::error::release $TAG already exists"
-            exit 1
-          fi
 
       - name: Test
         run: make test
@@ -245,16 +277,11 @@ jobs:
         run: make dist VERSION="$VERSION"
 
       - name: Release notes
-        # The same notes go to the GitHub Release and into the update window.
-        # A version bump on main has no tag yet: the notes run up to its commit.
         if: needs.version.outputs.publish == 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ needs.version.outputs.tag }}
+          NOTES: ${{ needs.notes.outputs.notes }}
           VERSION: ${{ needs.version.outputs.version }}
-        run: |
-          gh api "repos/$GITHUB_REPOSITORY/releases/generate-notes" -f tag_name="$TAG" -f target_commitish="$GITHUB_SHA" --jq .body \
-            > "build/dist/cuadro-$VERSION-macos-$(uname -m).md"
+        run: printf '%s\n' "$NOTES" > "build/dist/cuadro-$VERSION-macos-$(uname -m).md"
 
       - name: Update feed
         env:
@@ -271,14 +298,46 @@ jobs:
           fi
           make appcast VERSION="$VERSION"
 
+      # Hands the files to the publish job; a manual run keeps them as its result.
+      - name: Upload artifacts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: cuadro-${{ needs.version.outputs.version }}
+          path: build/dist/
+          if-no-files-found: error
+          retention-days: ${{ needs.version.outputs.publish == 'true' && 1 || 14 }}
+
+      - name: Remove signing keychain
+        if: always() && env.SIGNING_KEYCHAIN != ''
+        run: security delete-keychain "$SIGNING_KEYCHAIN"
+
+  publish:
+    name: publish
+    needs: [version, build]
+    if: needs.version.outputs.publish == 'true'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      contents: write  # create the GitHub Release and its tag
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: cuadro-${{ needs.version.outputs.version }}
+          path: dist
+
+      - name: Verify checksums
+        working-directory: dist
+        run: sha256sum --check --strict SHA256SUMS
+
       - name: Publish GitHub Release
-        if: needs.version.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           TAG: ${{ needs.version.outputs.tag }}
           PRERELEASE: ${{ needs.version.outputs.prerelease }}
         run: |
-          flags=(--title "$TAG" --notes-file build/dist/*.md)
+          flags=(--title "$TAG" --notes-file dist/*.md)
           # A pushed tag must exist; a version bump on main gets its tag here.
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then
             flags+=(--verify-tag)
@@ -286,16 +345,4 @@ jobs:
             flags+=(--target "$GITHUB_SHA")
           fi
           if [[ "$PRERELEASE" == "true" ]]; then flags+=(--prerelease); fi
-          gh release create "$TAG" "${flags[@]}" build/dist/*.zip build/dist/*.dmg build/dist/SHA256SUMS build/dist/appcast.xml
-
-      - name: Upload artifacts
-        if: github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
-        with:
-          name: cuadro-${{ needs.version.outputs.version }}
-          path: build/dist/
-          retention-days: 14
-
-      - name: Remove signing keychain
-        if: always() && env.SIGNING_KEYCHAIN != ''
-        run: security delete-keychain "$SIGNING_KEYCHAIN"
+          gh release create "$TAG" "${flags[@]}" dist/*.zip dist/*.dmg dist/SHA256SUMS dist/appcast.xml
